@@ -1,4 +1,4 @@
-﻿# Pixiv 知心画廊 一键安装（Windows / PowerShell）
+# Pixiv 知心画廊 一键安装（Windows / PowerShell）
 # 用法：powershell -ExecutionPolicy Bypass -c "irm https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery/raw/main/install.ps1 | iex"
 $ErrorActionPreference = 'Stop'
 

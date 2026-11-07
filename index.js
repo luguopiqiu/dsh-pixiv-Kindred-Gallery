@@ -67,6 +67,36 @@ function dshProfileDir() {
   return null
 }
 
+/**
+ * 跑 npm install。
+ * Windows 上的坑：npm 只有 npm.cmd 没有 .exe，Node 的 spawnSync（不带 shell）走 CreateProcess，
+ * 不认 PATHEXT，于是直接 ENOENT、status=null、stdout 空 —— 看上去"装完了"却一个依赖都没装。
+ * 所以这里优先用 node 目录里的 npm.cmd，找不到就让 shell 去解析 PATHEXT。
+ */
+function runNpmInstall(cwd) {
+  const args = ['install', '--omit=dev', '--registry=https://registry.npmmirror.com', '--no-audit', '--no-fund']
+  const opts = { cwd, windowsHide: true, encoding: 'utf8', timeout: 420000, maxBuffer: 16 * 1024 * 1024 }
+  const q = (s) => (/[\s"&^|<>]/.test(s) ? '"' + s + '"' : s)
+  const cmdline = (bin) => [q(bin), ...args.map(q)].join(' ')
+  const pack = (r, bin) => ({
+    status: r.status,
+    stdout: String(r.stdout || ''),
+    stderr: String(r.stderr || ''),
+    error: r.error || null,
+    cmd: cmdline(bin)
+  })
+  try {
+    if (process.platform === 'win32') {
+      const local = join(dirname(process.execPath), 'npm.cmd')
+      const bin = existsSync(local) ? local : 'npm'
+      return pack(spawnSync(cmdline(bin), { ...opts, shell: true }), bin)
+    }
+    return pack(spawnSync('npm', args, opts), 'npm')
+  } catch (e) {
+    return { status: null, stdout: '', stderr: '', error: e, cmd: cmdline('npm') }
+  }
+}
+
 /** 一键安装刷Pixiv：下载 zip → 解压 → npm i（npmmirror）→ 写 profile 依赖/bundles → 建 junction */
 async function installPixivPlugin(repoArg) {
   const repo = String(repoArg || PIXIV_SCROLL_REPO).trim().replace(/\.git$/, '').replace(/\/$/, '')
@@ -93,8 +123,16 @@ async function installPixivPlugin(repoArg) {
       if (existsSync(target)) rmSync(target, { recursive: true, force: true })
       cpSync(root, target, { recursive: true })
       steps.push({ step: 'extract', dir: target })
-      const npm = spawnSync('npm', ['install', '--omit=dev', '--registry=https://registry.npmmirror.com', '--no-audit', '--no-fund'], { cwd: target, windowsHide: true, encoding: 'utf8', timeout: 420000 })
-      steps.push({ step: 'npm', status: npm.status, tail: String((npm.stdout || '') + (npm.stderr || '')).slice(-300) })
+      const npm = runNpmInstall(target)
+      const npmTail = (npm.stdout + npm.stderr).trim()
+      steps.push({ step: 'npm', status: npm.status, cmd: npm.cmd, tail: npmTail.slice(-300), error: npm.error ? String(npm.error.message || npm.error) : '' })
+      const nmDir = join(target, 'node_modules')
+      const depsOk = existsSync(nmDir) && readdirSync(nmDir).length > 0
+      steps.push({ step: 'npm-check', ok: depsOk })
+      if (!depsOk) {
+        const why = npm.error ? String(npm.error.message || npm.error) : (npmTail.slice(-200) || 'npm 没有任何输出')
+        return { ok: false, error: '刷Pixiv 的依赖没装上（npm 执行失败）：' + why, steps, target, repo: 'https://github.com/' + owner + '/' + name }
+      }
     } else {
       steps.push({ step: 'source-exists', dir: target })
     }
