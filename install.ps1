@@ -1,6 +1,23 @@
 # Pixiv 知心画廊 一键安装（Windows / PowerShell）
 # 用法：powershell -ExecutionPolicy Bypass -c "irm https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery/raw/main/install.ps1 | iex"
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+# PS 5.1 默认的 TLS 栈会在 codeload 上偶发 "unexpected EOF"，显式固定到 TLS 1.2 稳定得多
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+
+function Get-FileWithRetry {
+  param([string]$Url, [string]$OutFile, [int]$Tries = 3)
+  for ($i = 1; $i -le $Tries; $i++) {
+    try {
+      Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -TimeoutSec 90
+      return
+    } catch {
+      if ($i -eq $Tries) { throw "下载失败（已重试 $Tries 次）：$($_.Exception.Message)" }
+      Write-Host "   下载失败（第 $i 次）：$($_.Exception.Message)，重试…" -ForegroundColor Yellow
+      Start-Sleep -Seconds 2
+    }
+  }
+}
 
 $repo = 'splanternQAQ/dsh-pixiv-Kindred-Gallery'
 $name = 'dsh-pixiv-kindred-gallery'
@@ -23,7 +40,7 @@ Write-Host "==> 下载 $repo" -ForegroundColor Cyan
 $tmp = Join-Path $env:TEMP ('pg-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp | Out-Null
 $zip = Join-Path $tmp 'src.zip'
-Invoke-WebRequest -Uri "https://codeload.github.com/$repo/zip/refs/heads/main" -OutFile $zip -UseBasicParsing
+Get-FileWithRetry -Url "https://codeload.github.com/$repo/zip/refs/heads/main" -OutFile $zip
 Expand-Archive -Path $zip -DestinationPath $tmp -Force
 $srcDir = (Get-ChildItem $tmp -Directory | Where-Object { $_.Name -like "$zipPrefix-*" } | Select-Object -First 1).FullName
 if (-not $srcDir) { throw '解压后找不到源码目录' }
