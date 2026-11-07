@@ -1,0 +1,19 @@
+node_modules/
+*.bak
+*.bak-*
+*.log
+tmp-recover.py
+.DS_Store
+Thumbs.db
+
+dsh-pixiv-Kindred-Gallery-Download/
+dsh-pixiv-Kindred-Gallery-Download.sealed-*/
+shots/
+*.zip
+
+# 历史补丁留下的 .bak 与快照
+_archive
+_archive/
+*.pre-*
+_legacy/
+*.7z

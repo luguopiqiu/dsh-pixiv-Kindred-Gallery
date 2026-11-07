@@ -1,0 +1,61 @@
+{
+  "name": "dsh-pixiv-kindred-gallery",
+  "version": "1.0.0",
+  "description": "Pixiv 知心画廊：跑一轮/评分/作品库/口味画像的 DSH 插件（依赖刷Pixiv 插件 dsh-pixiv-scroll 1.1.14）",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "pixiv",
+    "gallery",
+    "rating"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "client.js",
+    "index.js",
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "install.ps1"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2",
+    "node": ">=22.19"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "author": "春灯笼",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "selftest": "node selftest.mjs",
+    "check:buttons": "node check-buttons.mjs",
+    "check": "node selftest.mjs && node check-buttons.mjs"
+  }
+}

@@ -1,0 +1,14 @@
+# ============================================================================
+# dsh-pixiv-Kindred-Gallery —— DSH bundle patch
+# ============================================================================
+# entry id 必须等于：
+#   · 插件家目录名（$DSH_HOME/pixiv-gallery）
+#   · 客户端的配置/接口命名空间
+# 装好后把 "dsh-pixiv-Kindred-Gallery" 加进 profile 的 dsh.profile.bundles 即生效。
+# ============================================================================
+
+- insert:
+    - id: pixiv-gallery
+      name: dsh-pixiv-kindred-gallery
+      config:
+        enabled: true
