@@ -25,7 +25,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
-  addWorkToTag, addWorkToVirtualTag, allworkOf, blankState, buildFeedback, cleanupTrash, collectionAdd,
+  addWorkToTag, addWorkToVirtualTag, allworkOf, blankState, buildFeedback, cleanupTrash, collectWorkDirs, collectionAdd,
   collectionCreate, collectionDelete, collectionRemove, collectionRename, copyTagFiles, copyTagLinks, copyWorkFiles,
   createTag, deleteTagFolder, deleteVirtualTag, deleteWork, followedTags, fmtDate, libScore, libraryAdd, listLibrary, listLibraryCached, resetLibraryCache,
   backfillTrash,
@@ -171,7 +171,7 @@ import { ensureThumb } from './lib/thumbs.mjs'
 import {
   GALLERY_WORKSPACE_NAME, GALLERY_WORKSPACE_TITLE, GALLERY_WORKSPACE_LEGACY,
   dshHome, fileMime, galleryHome, imageFilesOfWork, isInside, latestRoundOf, metadataFileFor, picksRootOf, pixivHome,
-  readJson, readMetadata, readText, safeFile, safeName, saveRootOf, sortImageFiles, statSafe, workspaceDirOf,
+  readJson, readMetadata, readText, safeFile, safeName, saveRootOf, setGalleryHome, sortImageFiles, statSafe, workspaceDirOf,
   worksRootOf, writeJson, writeText,
 } from './lib/paths.mjs'
 
@@ -377,13 +377,11 @@ const reRenderRound = async (round) => {
     return sendFile(t || source)
   }
 
-  /** 这件作品是否已经在作品库里落盘了（按目录名后缀 _<id> 判断） */
+  /** 这件作品是否已经在作品库里落盘了（目录名后缀 _<id>；作品根可能多级，要递归） */
   const isDownloaded = (id) => {
     const tail = `_${String(id)}`
     try {
-      for (const e of readdirSync(allworkOf(pixiv), { withFileTypes: true })) {
-        if (e.isDirectory() && e.name.endsWith(tail)) return true
-      }
+      return collectWorkDirs(allworkOf(pixiv)).some((d) => basename(d).endsWith(tail))
     } catch { /* 空库 */ }
     return false
   }
@@ -629,7 +627,7 @@ const reRenderRound = async (round) => {
   }
 
   const workCountOf = (p) => {
-    try { return readdirSync(worksRootOf(p), { withFileTypes: true }).filter((e) => e.isDirectory()).length } catch { return 0 }
+    try { return collectWorkDirs(worksRootOf(p)).length } catch { return 0 }
   }
 
   const runCmd = (cmd, args, opts = {}) => new Promise((resolveP) => {
@@ -2661,7 +2659,8 @@ const routes = {
         // 缩略图可能已被清理：能对上 all_works 的作品就用作品封面
         const coverById = new Map()
         try {
-          for (const d of readdirSync(saveRootOf(pixiv))) {
+          for (const p of collectWorkDirs(saveRootOf(pixiv))) {
+            const d = basename(p)
             const m = /_(\d{4,})$/.exec(d)
             if (m) coverById.set(m[1], d)
           }
@@ -2888,7 +2887,7 @@ const routes = {
         for (const v of Object.values(st.libraryAdded || {})) { add(v?.id); fromName(v?.name) }
         for (const [id, m] of Object.entries(st.workMarks || {})) if (m && m.bookmark && m.bookmark !== 'none') add(id)
         for (const id of collectedIdSet(st)) add(id)
-        try { for (const nm of readdirSync(allworkOf(pixiv))) fromName(nm) } catch { /* 没有就在 */ }
+        try { for (const p of collectWorkDirs(allworkOf(pixiv))) fromName(basename(p)) } catch { /* 没有就在 */ }
         const list = [...ids]
         const file = join(pixiv, 'skip-ids.json')
         try { writeFileSync(file, JSON.stringify({ at: Date.now(), count: list.length, ids: list }, null, 1), 'utf8') } catch (e) {
@@ -4829,7 +4828,7 @@ const routes = {
         if (!name) return bad(400, '缺少 name')
         const dest = String(body?.dest || '').trim()
         if (!dest) return bad(400, '缺少目标目录')
-        const need = dirBytes(join(allworkOf(pixiv), name))
+        const need = dirBytes(resolveWorkDir(name, body?.id))
         const free = diskFree(dest)
         if (Number.isFinite(free) && free < need * 1.02) return bad(409, `磁盘空间不足：还需要约 ${(need / 1e9).toFixed(2)} GB，剩余 ${(free / 1e9).toFixed(2)} GB`)
         const r = copyWorkFiles(pixiv, name, dest)
@@ -5015,13 +5014,15 @@ const routes = {
         if (!names.length) return bad(400, '这个列表下没有作品')
         const dest = join(saveRootOf(pixiv), safeName(name, 60) || 'list')
         if (existsSync(dest)) return bad(409, '同名文件夹已存在')
-        const need = names.reduce((a, n) => a + dirBytes(join(allworkOf(pixiv), n)), 0)
+        const pairs = names.map((n) => ({ n, src: resolveWorkDir(n) })).filter((x) => x.src && existsSync(x.src))
+        if (!pairs.length) return bad(404, '这些作品都还没下载到本地')
+        const need = pairs.reduce((a, x) => a + dirBytes(x.src), 0)
         const free = diskFree(saveRootOf(pixiv))
         if (Number.isFinite(free) && free < need * 1.05) return bad(409, `磁盘空间不足：还需要约 ${(need / 1e9).toFixed(2)} GB，剩余 ${(free / 1e9).toFixed(2)} GB`)
         mkdirSync(dest, { recursive: true })
-        for (const n of names) cpSync(join(allworkOf(pixiv), n), join(dest, n), { recursive: true })
+        for (const x of pairs) cpSync(x.src, join(dest, x.n), { recursive: true })
         /* 不再自动弹资源管理器（用户嫌窗口太多） */
-        return ok({ dest, works: names.length, bytes: need })
+        return ok({ dest, works: pairs.length, bytes: need })
       },
     },
 
@@ -5039,7 +5040,8 @@ const routes = {
         mkdirSync(dest, { recursive: true })
         let made = 0
         for (const n of names) {
-          const target = join(allworkOf(pixiv), n)
+          const target = resolveWorkDir(n)
+          if (!target) continue
           const link = join(dest, n)
           if (existsSync(link) || lstatSync(link, { throwIfNoEntry: false })) continue
           symlinkSync(target, link, 'junction')
@@ -5060,7 +5062,7 @@ const routes = {
         if (!isAbsolute(dest)) return bad(400, '目标目录必须是绝对路径')
         const names = workNamesForList(pixiv, load(), kind, name)
         if (!names.length) return bad(400, '这个列表下没有作品')
-        const srcDirs = names.map((n) => join(allworkOf(pixiv), n))
+        const srcDirs = names.map((n) => resolveWorkDir(n)).filter(Boolean)
         const files = srcDirs.flatMap((d) => imageFilesOfWork(d).map((f) => ({ dir: d, file: f })))
         const need = files.reduce((a, f) => a + (statSafe(join(f.dir, f.file))?.size || 0), 0)
         const free = diskFree(dest)
@@ -5398,6 +5400,8 @@ process.exit(0);
 
   return {
     routes,
+    // 暴露给 apply()：15 分钟的定时 tick 在 makeApi 闭包外面，拿不到这个局部函数
+    queueAutoDownload,
     readPreferences,
     backfillWorkMeta,
     async handle(method, path, query, body) {
@@ -5444,6 +5448,12 @@ export function apply(ctx) {
   }
 
   log(`激活：home=${home} pixiv=${pixiv}`)
+  // 作品库与下载统一住画廊家目录，不再依赖刷Pixiv 插件的 all_works；装上就把目录建好
+  try {
+    setGalleryHome(home)
+    mkdirSync(join(home, 'Download'), { recursive: true })
+    log(`作品根：${join(home, 'Download')}`)
+  } catch (e) { log(`作品根初始化失败：${e?.message ?? e}`) }
   // 分页图缓存别无限长
   try { const pr = prunePageCache(home); if (pr.removed) log(`分页图缓存清理：删了 ${pr.removed} 个作品缓存，剩 ${Math.round(pr.bytes / 1048576)}MB`) } catch { /* ignore */ }
   // 独立工作区：知心画廊（配置/喜好缓存/缩略图都住这里；老安装沿用英文目录）
@@ -5534,7 +5544,7 @@ export function apply(ctx) {
            queueAutoDownload 自带 reloading 互斥、网络失败暂停 10 分钟）。界面备注写的就是这一次。
            放在「有没有元数据要补」的早退之前，否则库里信息一全就再也不跑了。 */
         try {
-          const queued = queueAutoDownload(st, list)
+          const queued = api.queueAutoDownload(st, list)
           if (queued) log(`定时自动下载：补下 ${queued} 件`)
         } catch (e) { log('定时自动下载跳过：' + (e?.message ?? e)) }
         const ids = []

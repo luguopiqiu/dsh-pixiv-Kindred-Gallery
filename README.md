@@ -42,7 +42,7 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/splanternQAQ/dsh-p
 ## 数据放在哪
 
 - 插件源码：本仓库；
-- 画廊数据（gallery.json / thumbs / pagecache / 下载）：`~/.dsh/dsh-pixiv-Kindred-Gallery`，下载默认在同级 `dsh-pixiv-Kindred-Gallery-Download`；
+- 画廊数据（gallery.json / thumbs / pagecache / 下载）：`~/.dsh/dsh-pixiv-Kindred-Gallery`；作品库与原图都在它下面的 `Download\illust\{画师}\{标题}_{id}`，不再落到刷Pixiv 的目录；
 - 刷Pixiv 数据：`~/.dsh/pixiv-duty`。
 
 ## 致谢
