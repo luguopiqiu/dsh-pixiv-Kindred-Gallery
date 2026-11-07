@@ -184,7 +184,7 @@ const MAX_BODY = 1024 * 1024
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const WORK_CONCURRENCY = Math.max(1, Number(process.env.PIXIV_GALLERY_WORK_CONCURRENCY) || 3)
 
-const GALLERY_VERSION = '1.0.0'
+const GALLERY_VERSION = '1.0.1'
 const GALLERY_REPO = 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery'
 
 function bad(status, error, extra = {}) {
