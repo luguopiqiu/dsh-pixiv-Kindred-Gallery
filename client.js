@@ -89,6 +89,83 @@ window.__ModuleLoader__.load({
       return [node, (title, def = '') => ask('prompt', title, def), (title, message = '') => ask('confirm', title, '', message)]
     }
 
+    /* 更新弹窗：最新版本、更新时间、这一版改了什么，装不装由主人自己点。
+       装完只是把文件换掉，真正生效要重启 DSH —— 所以这里给一个「立即重启」。 */
+    function UpdateSheet({ data, onClose, onRestart }) {
+      const [installing, setInstalling] = React.useState(false)
+      const [done, setDone] = React.useState(null)
+      const [err, setErr] = React.useState('')
+      const info = data?.info || null
+      const fmtTime = (s) => {
+        if (!s) return '—'
+        const d = new Date(s)
+        if (Number.isNaN(d.getTime())) return String(s)
+        return d.toLocaleString('zh-CN', { hour12: false })
+      }
+      const install = async () => {
+        setInstalling(true); setErr('')
+        try {
+          const r = await api('/update/install', {})
+          if (!r.ok) throw new Error(r.error || '安装失败')
+          setDone(r)
+        } catch (e) {
+          setErr(String(e?.message ?? e))
+        } finally { setInstalling(false) }
+      }
+      const notes = Array.isArray(info?.notes) ? info.notes : []
+      const notesTitle = info?.noteSource === 'README' ? '这一版改了什么（README 更新日志）'
+        : info?.noteSource === 'commit' ? '最新提交说明' : '更新内容'
+      return h('div', { 'data-pg-modal': '', style: { zIndex: 420 }, onClick: onClose },
+        h('div', {
+          'data-pg-sheet': '', 'data-pg-upd': '',
+          style: { maxWidth: '560px', width: 'min(94vw, 560px)', padding: '18px 20px' },
+          onClick: (e) => e.stopPropagation(),
+        },
+        h('div', { 'data-pg-title': '' }, done ? '更新已下载' : '检查更新'),
+        data?.loading ? h('div', { 'data-pg-note2': '', style: { marginTop: '10px' } }, '正在连接 GitHub…') : null,
+
+        done ? h('div', null,
+          h('div', { 'data-pg-note2': '', style: { marginTop: '10px', lineHeight: 1.8 } },
+            `已把 ${done.from || ''} 更新到 ${done.installed || '最新版'}（${done.files || 0} 个文件）。`,
+            h('br'), '重启 DSH 后生效。旧版本备份在：',
+            h('br'), h('span', { style: { wordBreak: 'break-all', color: '#94a3b8' } }, done.backup || '—')),
+          h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } },
+            h('button', { 'data-pg-btn': '', type: 'button', onClick: onClose }, '稍后重启'),
+            h('button', { 'data-pg-btn': '', 'data-primary': '', type: 'button', onClick: onRestart }, '立即重启'))) : null,
+
+        !done && info ? h('div', null,
+          h('div', { style: { display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap', marginTop: '10px' } },
+            h('span', { style: { fontSize: '15px', color: '#94a3b8' } }, `当前 ${info.version || ''}`),
+            h('span', { style: { fontSize: '19px', fontWeight: 900, color: info.update ? '#fbbf24' : '#86efac' } },
+              info.update ? `→ ${info.latest}` : `已是最新（${info.latest || info.version}）`)),
+          h('div', { 'data-pg-note2': '', style: { marginTop: '8px', lineHeight: 1.7 } },
+            `更新时间：${fmtTime(info.updatedAt)}`, info.sha ? `｜最新提交 ${info.sha}` : '',
+            h('br'),
+            `GitHub Star：${info.stars ?? '—'}　｜　`,
+            h('a', { href: info.url || info.repo, target: '_blank', rel: 'noreferrer', 'data-pg-link': '' }, '在浏览器打开仓库')),
+          notes.length ? h('div', {
+            'data-pg-updnotes': '',
+            style: { marginTop: '12px', maxHeight: '240px', overflow: 'auto', padding: '10px 12px', borderRadius: '10px', background: 'rgba(148,163,184,.08)', lineHeight: 1.7 },
+          },
+          h('div', { 'data-pg-note2': '', style: { marginBottom: '6px' } }, notesTitle),
+          notes.map((s, i) => h('div', { key: i, style: { fontSize: '13px', color: '#e2e8f0' } }, s))) 
+            : h('div', { 'data-pg-note2': '', style: { marginTop: '12px' } }, '远程仓库没有写更新说明。'),
+          err ? h('div', { 'data-pg-note2': '', style: { color: '#f87171', marginTop: '10px', whiteSpace: 'pre-wrap' } }, `安装失败：${err}`) : null,
+          h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' } },
+            h('button', { 'data-pg-btn': '', type: 'button', onClick: onClose, disabled: installing }, '关闭'),
+            h('button', {
+              'data-pg-btn': '', 'data-primary': '', type: 'button',
+              disabled: installing || !info.update,
+              title: info.update ? '下载最新源码覆盖当前插件，做完要重启 DSH' : '已经是最新版本',
+              onClick: install,
+            }, installing ? '正在下载…' : info.update ? `安装 ${info.latest}` : '已是最新'))) : null,
+
+        data?.error ? h('div', null,
+          h('div', { 'data-pg-note2': '', style: { color: '#f87171', marginTop: '10px', whiteSpace: 'pre-wrap' } }, `检查失败：${data.error}`),
+          h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '14px' } },
+            h('button', { 'data-pg-btn': '', type: 'button', onClick: onClose }, '关闭'))) : null))
+    }
+
     /* 缩略图右键菜单：只做「复制当前作品到剪贴板」，blob 在右键时就开始取，点下去立刻写剪贴板 */
     function ImageCopyMenu({ menu, onClose, say }) {
       const [busy, setBusy] = React.useState(false)
@@ -1971,6 +2048,14 @@ a[data-pg-tastepill]{text-decoration:none;}
 [data-pg-presetname]{font-size:12px;font-weight:650;display:flex;align-items:center;gap:6px;}
 [data-pg-presetactive]{font-size:9px;padding:1px 5px;border-radius:999px;background:rgba(34,197,94,.18);color:#4ade80;border:1px solid rgba(34,197,94,.4);}
 [data-pg-about]{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--dsw-alias-label-secondary,#aeb4bd);}
+/* GitHub Star 徽章：左边标签带星标，右边独立色块放数字，仿 README 里那种大项目常挂的样式 */
+[data-pg-starbtn]{display:inline-flex;align-items:stretch;height:24px;border-radius:6px;overflow:hidden;text-decoration:none;border:1px solid rgba(148,163,184,.38);background:rgba(148,163,184,.10);box-shadow:0 1px 2px rgba(0,0,0,.35);transition:border-color .16s,box-shadow .16s,transform .16s;}
+[data-pg-starbtn]:hover{border-color:rgba(227,179,65,.62);box-shadow:0 3px 12px rgba(227,179,65,.20);transform:translateY(-1px);text-decoration:none;}
+[data-pg-starbtn]:active{transform:translateY(0);box-shadow:0 1px 2px rgba(0,0,0,.35);}
+[data-pg-starbtn] .pg-star-l{display:inline-flex;align-items:center;gap:5px;padding:0 8px;color:#cbd5e1;background:linear-gradient(180deg,rgba(148,163,184,.14),rgba(148,163,184,.06));font-size:10.5px;font-weight:800;letter-spacing:.06em;line-height:1;}
+[data-pg-starbtn] .pg-star-l svg{width:12px;height:12px;fill:#e3b341;filter:drop-shadow(0 0 3px rgba(227,179,65,.45));}
+[data-pg-starbtn] .pg-star-r{display:inline-flex;align-items:center;justify-content:center;min-width:32px;padding:0 9px;border-left:1px solid rgba(148,163,184,.38);background:linear-gradient(180deg,rgba(96,165,250,.26),rgba(96,165,250,.14));color:#dbeafe;font-size:12px;font-weight:900;font-variant-numeric:tabular-nums;line-height:1;}
+[data-pg-starbtn]:hover .pg-star-r{background:linear-gradient(180deg,rgba(96,165,250,.40),rgba(96,165,250,.22));color:#fff;}
 [data-pg-link]{display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:7px;text-decoration:none;font-size:11px;font-weight:650;border:1px solid transparent;}
 [data-pg-link][data-bili]{background:#00aeec;color:#fff;border-color:#00aeec;}
 [data-pg-link][data-github]{background:#111;color:#fff;border-color:#333;}
@@ -6517,6 +6602,18 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
       const [version, setVersion] = React.useState('0.7.39')
       const [stars, setStars] = React.useState(null)
       const [updateMsg, setUpdateMsg] = React.useState('')
+      /* 更新弹窗：null = 关闭；{loading:true} / {error} / {info} */
+      const [upd, setUpd] = React.useState(null)
+      React.useEffect(() => {
+        /* 打开设置时静默刷一次 Star 数与版本（服务端 2 分钟内复用缓存，不会每次都打 GitHub） */
+        let alive = true
+        api('/update').then((r) => {
+          if (!alive || !r || !r.ok) return
+          setStars(Number(r.stars) || 0)
+          if (r.version) setVersion(String(r.version))
+        }).catch(() => {})
+        return () => { alive = false }
+      }, [])
       const [ratedCount, setRatedCount] = React.useState(0)
       const [choice, setChoice] = React.useState(null)
       const [stats, setStats] = React.useState({ cacheBytes: 0, workCount: 0, diskFree: 0 })
@@ -6752,14 +6849,19 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
         } catch (e) { note(String(e?.message ?? e), 'warn') } finally { setBusy('') }
       }
       const checkUpdate = async () => {
-        setBusy('update'); setUpdateMsg('')
+        setBusy('update'); setUpdateMsg(''); setUpd({ loading: true })
         try {
-          const r = await api('/update')
+          /* force=1：点了按钮就得看最新，不能拿两分钟前的缓存糊弄 */
+          const r = await api('/update?force=1')
           if (!r.ok) throw new Error(r.error || '检查更新失败')
           setStars(Number(r.stars) || 0)
           setVersion(String(r.version || version))
-          setUpdateMsg(r.latest ? (r.update ? `发现新版本 ${r.latest}` : `已是最新（${r.version}）`) : `当前版本 ${r.version}`)
-        } catch (e) { setUpdateMsg(String(e?.message ?? e)) } finally { setBusy('') }
+          setUpdateMsg(r.update ? `发现新版本 ${r.latest}` : '已是最新')
+          setUpd({ info: r })
+        } catch (e) {
+          setUpdateMsg(String(e?.message ?? e))
+          setUpd({ error: String(e?.message ?? e) })
+        } finally { setBusy('') }
       }
       const readAccountPrefs = async () => {
         setPrefBusy('read'); setPrefMsg('')
@@ -7816,6 +7918,7 @@ const presetBox = h('div', { 'data-pg-box': 'preset' },
 
 
 
+        upd ? h(UpdateSheet, { data: upd, onClose: () => setUpd(null), onRestart: () => { setUpd(null); doPluginReload() } }) : null,
         askTags ? h('div', { 'data-pg-modal': '', onClick: () => setAskTags(false) },
           h('div', { 'data-pg-sheet': '', style: { maxWidth: '520px' }, onClick: (e) => e.stopPropagation() },
             h('div', { 'data-pg-body': '' },
@@ -7839,7 +7942,18 @@ const presetBox = h('div', { 'data-pg-box': 'preset' },
           }, projectUrl || 'github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery')),
           h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
             h('span', { 'data-pg-note2': '' }, `版本 ${version}`),
-            h('span', { 'data-pg-note2': '' }, `Star ${stars === null ? '—' : stars}`),
+            h('a', {
+              'data-pg-starbtn': '',
+              href: projectUrl || 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery',
+              target: '_blank', rel: 'noreferrer',
+              title: `GitHub Star 数：${stars === null ? '读取中…' : stars}（打开设置页时静默刷新，两分钟缓存）`,
+            },
+            h('span', { className: 'pg-star-l' },
+              h('svg', { viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+                h('path', { d: 'M8 .25a.75.75 0 0 1 .673.418l1.882 3.815 4.21.612a.75.75 0 0 1 .416 1.279l-3.046 2.97.719 4.192a.751.751 0 0 1-1.088.791L8 12.347l-3.766 1.98a.75.75 0 0 1-1.088-.79l.72-4.194L.818 6.374a.75.75 0 0 1 .416-1.28l4.21-.611L7.327.668A.75.75 0 0 1 8 .25Z' })),
+              'STAR'),
+            h('span', { className: 'pg-star-r' },
+              stars === null ? '—' : (stars >= 1000 ? `${(stars / 1000).toFixed(stars >= 10000 ? 0 : 1).replace(/\.0$/, '')}k` : String(stars)))),
             h('button', { 'data-pg-btn': '', disabled: busy === 'update', onClick: checkUpdate }, busy === 'update' ? '检查中…' : '检查更新'),
             updateMsg ? h('span', { 'data-pg-note2': '' }, updateMsg) : null),
           h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },

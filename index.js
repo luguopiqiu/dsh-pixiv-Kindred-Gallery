@@ -184,7 +184,7 @@ const MAX_BODY = 1024 * 1024
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const WORK_CONCURRENCY = Math.max(1, Number(process.env.PIXIV_GALLERY_WORK_CONCURRENCY) || 3)
 
-const GALLERY_VERSION = '1.0.2'
+const GALLERY_VERSION = '1.0.3'
 const GALLERY_REPO = 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery'
 
 function bad(status, error, extra = {}) {
@@ -817,11 +817,32 @@ const probeNetwork = async () => {
     return { ok: status >= 200 && status < 400, ms, status, proxy: Boolean(proxy) }
   }
 
-  const fetchJson = async (url) => {
-    const proxy = await resolveProxy()
-    const r = await runCmd(curlPath(), ['-sS', '-L', '--max-time', '10', ...(proxy ? ['--proxy', proxy] : []), '-H', 'accept: application/vnd.github+json', '-H', 'user-agent: dsh-pixiv-Kindred-Gallery', url], { timeout: 14000 })
-    if (!r.ok) throw new Error((r.err || '请求失败').slice(0, 160))
-    return JSON.parse(String(r.out || '').trim())
+  /* GitHub API：走 lib/net.mjs 的同一套换路链（直连优先 → 环境/注册表代理），
+     不再自己拼 curl。老实现只问 resolveProxy()，直连能用、代理端口却死着的时候会白等 10 秒。 */
+  const fetchJson = async (url) => proxiedJson(url, {
+    timeout: 15000,
+    headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+  })
+
+  /** 版本比较：'v1.0.10' > 'v1.0.9'，忽略前缀 v 与非数字尾巴 */
+  const stripVer = (v) => String(v || '').trim().replace(/^v/i, '')
+  const cmpVer = (a, b) => {
+    const A = stripVer(a).split('.').map((x) => parseInt(x, 10) || 0)
+    const B = stripVer(b).split('.').map((x) => parseInt(x, 10) || 0)
+    for (let i = 0; i < Math.max(A.length, B.length); i += 1) {
+      const x = A[i] || 0
+      const y = B[i] || 0
+      if (x !== y) return x - y
+    }
+    return 0
+  }
+  /** 从设置里的项目地址解析 owner/repo（不填就用默认仓库） */
+  const ghTarget = () => {
+    const st = load()
+    const projectUrl = String(st?.config?.projectUrl || '').trim() || GALLERY_REPO
+    const m = projectUrl.match(/github\.com\/([^/]+)\/([^/?#]+)/i)
+    if (!m) return null
+    return { projectUrl, owner: m[1], repo: m[2].replace(/\.git$/i, '') }
   }
 
   /** 用刷 Pixiv 的登录 cookie 读自己的收藏/关注；只读，不改 Pixiv 数据。 */
@@ -1979,42 +2000,173 @@ const routes = {
     },
 
     '/update': {
-      methods: ['GET'],
-      handler: async () => {
+      methods: ['GET', 'POST'],
+      handler: async (q) => {
         const state = load()
-        const projectUrl = String(state.config?.projectUrl || '').trim() || GALLERY_REPO
-        const m = projectUrl.match(/github\.com\/([^/]+)\/([^/#?]+)/i)
-        if (!m) return { status: 200, body: { ok: false, error: '项目地址不是 GitHub 仓库' } }
-        const owner = m[1]
-        const repo = m[2].replace(/\.git$/i, '')
+        const t = ghTarget()
+        if (!t) return { status: 200, body: { ok: false, error: '项目地址不是 GitHub 仓库' } }
+        const force = String(q?.get?.('force') || '') === '1'
+        const cached = state.config?.githubUpdate
+        /* 两分钟内、且缓存是对着当前版本查的 → 直接复用。GitHub 匿名 API 每个出口 IP 每小时只有 60 次，
+           设置页每挂载一次就烧掉四五个额度太浪费。 */
+        if (!force && cached && Number(cached.at) > 0 && Date.now() - Number(cached.at) < 120000 && stripVer(cached.version) === GALLERY_VERSION) {
+          return ok({ ...cached, cached: true })
+        }
+        const apiBase = `https://api.github.com/repos/${t.owner}/${t.repo}`
         try {
-          const info = await fetchJson(`https://api.github.com/repos/${owner}/${repo}`)
-          let latest = ''
+          const info = await fetchJson(apiBase)
+          const branch = String(info?.default_branch || 'main')
+          let rel = null
+          try { rel = await fetchJson(`${apiBase}/releases/latest`) } catch { /* 没有 release 不算失败 */ }
+          let commit = null
+          try { commit = await fetchJson(`${apiBase}/commits/${encodeURIComponent(branch)}`) } catch { /* ignore */ }
+          let remoteVersion = ''
           try {
-            const rel = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/releases/latest`)
-            latest = String(rel?.tag_name || rel?.name || '')
-          } catch { /* 没有 release 不算失败 */ }
-          if (!latest) {
-            try {
-              const raw = await fetchJson(`https://api.github.com/repos/${owner}/${repo}/contents/package.json?ref=main&t=${Date.now()}`)
-              const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
-              const pkg = text ? JSON.parse(text) : raw
-              latest = 'v' + String(pkg?.version || '')
-            } catch { /* 拿不到远程版本也不失败 */ }
+            const raw = await fetchJson(`${apiBase}/contents/package.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
+            const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
+            remoteVersion = stripVer(JSON.parse(text)?.version || '')
+          } catch { /* 拿不到远程版本也不失败 */ }
+          const latest = String(rel?.tag_name || rel?.name || (remoteVersion ? 'v' + remoteVersion : ''))
+          let notes = []
+          let noteSource = ''
+          if (rel?.body) {
+            notes = String(rel.body).split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, 12)
+            noteSource = 'release'
           }
-          state.config.githubStars = Number(info?.stargazers_count) || 0
-          state.config.githubLatest = latest
-          save()
-          return ok({
+          if (!notes.length) {
+            /* 没有 Release body：从 README 的更新日志里抠出这一版那一节 —— 给人看的是人话，不是提交号 */
+            try {
+              const raw = await fetchJson(`${apiBase}/contents/README.md?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
+              const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
+              const want = stripVer(latest)
+              const lines = text.split(/\r?\n/)
+              let start = -1
+              for (let i = 0; i < lines.length; i += 1) {
+                const m2 = /^###\s+(.+)$/.exec(lines[i])
+                if (m2 && (!want || String(m2[1]).includes(want))) { start = i; break }
+              }
+              if (start >= 0) {
+                const body = []
+                for (let i = start + 1; i < lines.length; i += 1) {
+                  if (/^###\s/.test(lines[i]) || /^##\s/.test(lines[i])) break
+                  const s = lines[i].trim()
+                  if (!s) continue
+                  body.push(s.replace(/^[-*]\s+/, '· ').replace(/\*\*/g, ''))
+                }
+                notes = body.slice(0, 14)
+                noteSource = 'README'
+              }
+            } catch { /* ignore */ }
+          }
+          if (!notes.length && commit?.commit?.message) {
+            notes = String(commit.commit.message).split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
+            noteSource = 'commit'
+          }
+          const updatedAt = String(rel?.published_at || commit?.commit?.committer?.date || commit?.commit?.author?.date || info?.pushed_at || '')
+          const payload = {
             version: GALLERY_VERSION,
-            latest: latest || '',
+            latest,
+            update: Boolean(latest) && cmpVer(latest, GALLERY_VERSION) > 0,
             stars: Number(info?.stargazers_count) || 0,
-            url: info?.html_url || projectUrl,
-            update: Boolean(latest && latest.replace(/^v/i, '') !== GALLERY_VERSION),
-            repo: projectUrl,
-          })
+            forks: Number(info?.forks_count) || 0,
+            updatedAt,
+            notes,
+            noteSource,
+            sha: String(commit?.sha || '').slice(0, 7),
+            url: info?.html_url || t.projectUrl,
+            repo: t.projectUrl,
+            branch,
+            at: Date.now(),
+          }
+          state.config.githubStars = payload.stars
+          state.config.githubLatest = latest
+          state.config.githubUpdate = payload
+          save()
+          return ok(payload)
         } catch (e) {
-          return { status: 200, body: { ok: false, error: String(e?.message ?? e) } }
+          log(`检查更新失败：${e?.stack || e?.message || e}`)
+          return { status: 200, body: { ok: false, error: String(e?.message ?? e), version: GALLERY_VERSION } }
+        }
+      },
+    },
+
+    /* 装更新：下载 main 的 zip → 解到临时目录 → 整份盖回插件自己的源码目录。
+       只动代码，不碰用户数据（数据在 ~/.dsh/…）。装完要重启 DSH 才生效。 */
+    '/update/install': {
+      methods: ['POST'],
+      handler: async (q, body) => {
+        const t = ghTarget()
+        if (!t) return bad(400, '项目地址不是 GitHub 仓库')
+        const dryRun = Boolean(body?.dryRun)
+        const apiBase = `https://api.github.com/repos/${t.owner}/${t.repo}`
+        const srcDir = dirname(fileURLToPath(import.meta.url))
+        let remoteVersion = ''
+        let branch = String(body?.branch || 'main')
+        try {
+          const info = await fetchJson(apiBase)
+          branch = String(body?.branch || info?.default_branch || 'main')
+          const raw = await fetchJson(`${apiBase}/contents/package.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
+          const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
+          remoteVersion = stripVer(JSON.parse(text)?.version || '')
+        } catch (e) {
+          if (!dryRun) return bad(502, `读取远程版本失败：${String(e?.message ?? e).slice(0, 160)}`)
+        }
+        if (!dryRun && remoteVersion && cmpVer(remoteVersion, GALLERY_VERSION) <= 0) {
+          return bad(409, `已经是最新版本（${GALLERY_VERSION}）`)
+        }
+        const root = mkdtempSync(join(tmpdir(), 'gallery-upd-'))
+        try {
+          const zipPath = join(root, 'src.zip')
+          const res = await proxiedGet(`https://codeload.github.com/${t.owner}/${t.repo}/zip/refs/heads/${encodeURIComponent(branch)}`, {
+            timeout: 120000,
+            headers: { accept: 'application/zip' },
+          })
+          if (res.status !== 200) return bad(502, `下载安装包失败（HTTP ${res.status}）`)
+          writeFileSync(zipPath, res.body)
+          const exDir = join(root, 'x')
+          mkdirSync(exDir, { recursive: true })
+          const tarExe = join(String(process.env.SystemRoot || 'C:\\Windows'), 'System32', 'tar.exe')
+          const tar = await runCmd(existsSync(tarExe) ? tarExe : 'tar', ['-xf', zipPath, '-C', exDir], { timeout: 180000 })
+          if (!tar.ok) return bad(500, `解压失败：${(tar.err || tar.out || '').slice(0, 200)}`)
+          const top = readdirSync(exDir).find((n) => statSync(join(exDir, n)).isDirectory())
+          if (!top) return bad(500, '安装包结构异常（没有顶层目录）')
+          const unpacked = join(exDir, top)
+          let files = 0
+          const walk = (d) => {
+            for (const n of readdirSync(d)) {
+              const p = join(d, n)
+              if (statSync(p).isDirectory()) walk(p)
+              else files += 1
+            }
+          }
+          walk(unpacked)
+          if (dryRun) {
+            return ok({ dryRun: true, remoteVersion, zipBytes: res.body.length, files, target: srcDir, branch })
+          }
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+          const backup = `${srcDir}.bak-${stamp}`
+          try {
+            cpSync(srcDir, backup, {
+              recursive: true,
+              force: true,
+              filter: (s) => !/[\\/]node_modules([\\/]|$)/.test(s) && !/[\\/]\.git([\\/]|$)/.test(s),
+            })
+          } catch (e) {
+            log(`更新前备份失败（继续安装）：${e?.message ?? e}`)
+          }
+          cpSync(unpacked, srcDir, { recursive: true, force: true })
+          log(`已安装更新：${GALLERY_VERSION} → ${remoteVersion || '?'}（${files} 个文件，备份 ${backup}）`)
+          try {
+            const st2 = load()
+            delete st2.config.githubUpdate
+            save()
+          } catch { /* ignore */ }
+          return ok({ installed: remoteVersion || '', from: GALLERY_VERSION, files, bytes: res.body.length, backup, needsRestart: true })
+        } catch (e) {
+          log(`安装更新失败：${e?.stack || e?.message || e}`)
+          return bad(500, String(e?.message ?? e))
+        } finally {
+          try { rmSync(root, { recursive: true, force: true }) } catch { /* ignore */ }
         }
       },
     },
