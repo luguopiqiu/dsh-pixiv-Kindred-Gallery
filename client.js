@@ -2325,6 +2325,12 @@ a[data-pg-tastepill]{text-decoration:none;}
 [data-pg-gatesheet]{width:min(500px,94vw);padding:0 0 14px;}
 [data-pg-gatetitle]{font-size:16px;font-weight:800;padding:16px 18px 6px;}
 [data-pg-gatenote]{font-size:13px;color:rgba(203,213,225,.85);padding:4px 18px 12px;line-height:1.7;}
+[data-pg-slowhot]{margin:2px 18px 8px;padding:12px 14px;border-radius:11px;border:1px solid rgba(251,146,60,.55);background:linear-gradient(180deg,rgba(251,146,60,.16),rgba(251,146,60,.05));display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;box-shadow:0 0 18px rgba(251,146,60,.12);}
+[data-pg-slowhot] [data-k]{font-size:11.5px;font-weight:800;letter-spacing:.14em;color:#fdba74;}
+[data-pg-slowhot] b{font-size:22px;font-weight:900;line-height:1.1;color:#fff;}
+[data-pg-slowhot] em{font-size:15px;font-weight:800;font-style:normal;color:#fdba74;}
+[data-pg-slowhot] [data-pct]{font-size:12.5px;font-weight:700;color:#fed7aa;opacity:.92;}
+[data-pg-slowhot] [data-fix]{flex-basis:100%;font-size:13px;line-height:1.65;color:#ffe4c7;}
 [data-pg-thumbdead]{display:flex;align-items:center;justify-content:center;width:100%;height:100%;min-height:130px;background:repeating-linear-gradient(45deg,#1b2430 0 9px,#141b24 9px 18px);color:#8fa3b8;font-size:12.5px;font-weight:700;letter-spacing:.5px;}
 [data-pg-gatelink]{display:inline-block;margin:2px 18px 0;padding:9px 13px;border-radius:9px;background:rgba(125,211,252,.13);border:1px solid rgba(125,211,252,.5);color:#7dd3fc;font-weight:800;font-size:13.5px;text-decoration:none;word-break:break-all;transition:background .12s,border-color .12s;}
 [data-pg-gatelink]:hover{background:rgba(125,211,252,.24);border-color:rgba(125,211,252,.85);}
@@ -8752,7 +8758,7 @@ function GalleryTab2({ onScopeChanged }) {
             else if (vPicked) say(`${strictLabel}完成：${got} 件（${secs} 秒），其中 AI 看画风精挑 ${vPicked}/${vWant} 件；缩略图已经就绪，原图需要时再手动下载`, 'good')
             else say(`${strictLabel}完成：${got} 件（${secs} 秒），但 AI 精挑这一轮没返回结果（${String(vi.error || '视觉模型没有响应').slice(0, 80)}），已自动回退快跑结果`, 'warn')
             if ((Number(fr.ms) || 0) > 35000) {
-              const slowAdv = { kind: 'slow', ms: Number(fr.ms) || 0, scanned: Number(fr.scanned) || 0, got, checked: Number(fr.checked) || 0, pre: Number(pre?.ms) || 0, proxy: pre?.proxy || '', slowdown: Boolean(fr.slowdown), timings: fr.timings || null, diag: null }
+              const slowAdv = { kind: 'slow', ms: Number(fr.ms) || 0, scanned: Number(fr.scanned) || 0, got, checked: Number(fr.checked) || 0, pre: Number(pre?.ms) || 0, proxy: pre?.proxy || '', slowdown: Boolean(fr.slowdown), timings: fr.timings || null, net: fr.net || null, diag: null }
               // 跑多轮时先攒着：等总结弹窗关掉再给诊断，别让两个弹窗叠在一起
               if (opt.batch) multiSlowRef.current = slowAdv
               else if (alive.current) setAdvice(slowAdv)
@@ -8772,9 +8778,9 @@ function GalleryTab2({ onScopeChanged }) {
             try { void loadAll() } catch { /* 不同外壳里可能没有 loadAll */ }
             if (!opt.batch) {
               queueSummary({
-                rows: [{ i: 1, ok: true }], title: '这一轮完成',
+                rows: [{ i: 1, ok: true, net: fr.net || null }], title: '这一轮完成',
                 ms: Number(fr.ms) || 0, got, scanned: Number(fr.scanned) || 0, checked: Number(fr.checked) || 0, vPicked,
-                tags: [], r18: 0, greet: '', flavor: '',
+                tags: [], r18: 0, greet: '', flavor: '', net: fr.net || null,
                 preset: presetName || '当前设置', strictness: strictLevel, slow: false,
               })
             }
@@ -8966,7 +8972,7 @@ function GalleryTab2({ onScopeChanged }) {
           if (r && r.ok && r.pending) { stopped = -i; break }
           if (!r || !r.ok) { stopped = i; break }
           okCount += 1
-          rows.push({ i, ok: true, got: Number(r.got) || 0, round: r.round || '', ms: Number(r.ms) || 0, scanned: Number(r.scanned) || 0, checked: Number(r.checked) || 0, vPicked: Number(r.vPicked) || 0 })
+          rows.push({ i, ok: true, got: Number(r.got) || 0, round: r.round || '', ms: Number(r.ms) || 0, scanned: Number(r.scanned) || 0, checked: Number(r.checked) || 0, vPicked: Number(r.vPicked) || 0, net: r.net || null })
           if (i < total) await new Promise((res) => setTimeout(res, 1800))
         }
         if (!alive.current) return
@@ -9004,7 +9010,9 @@ function GalleryTab2({ onScopeChanged }) {
         try {
           const r = await api('/netcheck')
           if (!alive.current) return
-          setLat(r?.ok ? { state: 'ok', ok: true, ms: Number(r.ms) || 0, proxy: r.proxy || '', vpnPorts: r.vpnPorts || [] } : { state: 'bad', ok: false, error: r?.error || '连接失败', vpnPorts: r?.vpnPorts || [] })
+          setLat(r?.ok
+            ? { state: 'ok', ok: true, ms: Number(r.ms) || 0, proxy: r.proxy || '', direct: Boolean(r.direct), route: r.route || '', routes: r.routes || [], vpnPorts: r.vpnPorts || [] }
+            : { state: 'bad', ok: false, error: r?.error || '连接失败', timeout: Boolean(r?.timeout), ms: Number(r?.ms) || 0, routes: r?.routes || [], vpnPorts: r?.vpnPorts || [] })
         } catch (e) {
           if (alive.current) setLat({ state: 'bad', ok: false, error: String(e?.message ?? e) })
         }
@@ -9402,15 +9410,20 @@ function GalleryTab2({ onScopeChanged }) {
                 const level = checking ? 2 : bad ? 0 : ok ? (ms < 120 ? 3 : ms < 260 ? 2 : 1) : 3
                 const barColor = bad ? 'rgba(148,163,184,.45)' : ok ? '#22c55e' : '#22c55e'
                 const text = checking ? '正在检测 pixiv 连接…'
-                  : ok ? `${lat?.direct ? '已连接 pixiv（直连）' : '已连接 pixiv（经代理）'} · ${ms} ms`
-                    : bad ? '连接 pixiv 失败，请检查 VPN'
+                  : ok ? (lat?.direct ? `pixiv 直连 · ${ms} ms` : `pixiv 经代理 · ${ms} ms`)
+                    : bad ? (lat?.timeout ? 'pixiv 连接超时 · 点此重测' : '连不上 pixiv · 点此重测')
                       : '点击检测 pixiv 连接'
+                const routeLine = Array.isArray(lat?.routes) && lat.routes.length
+                  ? '｜' + lat.routes.map((x) => x.route + (x.ok ? '（成功）' : '（' + String(x.error || '').slice(0, 60) + '）')).join(' → ')
+                  : ''
                 return h('button', {
                   'data-pg-signal': bad ? 'bad' : 'ok',
                   'data-level': String(level),
                   'data-state': st,
                   type: 'button',
-                  title: bad ? ('连接 pixiv 失败，请检查 VPN 设置和网络设置' + (lat?.error ? '（' + lat.error + '）' : '')) : (ok ? `已成功连接 pixiv，可以正常进行抓图，当前延迟为 ${ms} ms` : text),
+                  title: bad
+                    ? `连不上 pixiv：${lat?.error || '原因不明'}${routeLine}\n点一下重新检测；长时间超时多半是 VPN 节点挂了，直接点也行。`
+                    : (ok ? `已连通 pixiv：${lat?.direct ? '直连' : '经代理 ' + (lat?.route || lat?.proxy || '')}，延迟 ${ms} ms${routeLine}` : text),
                   onClick: () => { if (!checking) checkNet() },
                 },
                   h('span', { 'data-pg-bars': '' }, [1, 2, 3].map((i) => h('i', { key: i, 'data-on': i <= level ? '' : undefined, style: { background: i <= level ? barColor : 'rgba(127,127,127,.3)' } }))),
@@ -9594,7 +9607,8 @@ function GalleryTab2({ onScopeChanged }) {
             const parts = defs.map(([k, name, kind]) => [k, name, kind, Number(t[k]) || 0]).filter((x) => x[3] > 0)
             const max = parts.slice().sort((a, b) => b[3] - a[3])[0]
             const slow = total > 35000
-            const main = max ? `主要花在「${max[1]}」（${max[2] === 'net' ? '网络/接口' : '本地筛选'}）` : `正在等待 pixiv 搜索 / 作品详情（网络）`
+            const way = runProg.net && runProg.net.route ? '经代理 ' + runProg.net.route : '直连'
+            const main = max ? `主要花在「${max[1]}」（${max[2] === 'net' ? '网络/接口' : '本地筛选'} · ${way}）` : `正在等待 pixiv 搜索 / 作品详情（网络 · ${way}）`
             return h('div', { 'data-pg-runtiming': '', 'data-slow': slow ? '' : undefined },
               h(RunClock, { startedAt: runProg.startedAt, running: runProg.phase === 'run', ms: runProg.ms || t.totalMs || 0 }),
               ...parts.map(([k, name, kind, ms]) => h('span', { key: k }, name + ' ' + fmtMs(ms))),
@@ -9604,7 +9618,9 @@ function GalleryTab2({ onScopeChanged }) {
             ? h('div', { 'data-pg-runspeed': '' }, (() => {
               const secs = runProg.startedAt ? Math.round((Date.now() - runProg.startedAt) / 1000) : 0
               const stage = runProg.stage === 'vision' ? 'AI 看画风（把候选缩略图发给视觉模型）' : runProg.stage === 'single' ? '逐张检测（每件都要向 pixiv 要详情）' : '宽松扫描（批量向 pixiv 要详情）'
-              return `已等待 ${secs} 秒，当前阶段是「${stage}」，时间主要花在网络请求，不是本地筛选。${runProg.slowdown ? '后半段还出现了明显变慢，可能是 VPN 节点抖动或 pixiv 对当前出口限流。' : ''}跑完后会弹窗给出网速 / VPN 延迟 / 限流的检测结果。`
+              const way = runProg.net && runProg.net.route ? '经代理 ' + runProg.net.route : '直连'
+              const latTxt = lat && lat.state === 'ok' && lat.ms ? `，最近一次探测延迟 ${lat.ms} ms` : ''
+              return `已等待 ${secs} 秒，当前阶段是「${stage}」，访问 pixiv 的方式是${way}${latTxt}，时间主要花在网络请求，不是本地筛选。${runProg.slowdown ? '后半段还出现了明显变慢，可能是节点抖动或 pixiv 对当前出口限流。' : ''}跑完后会弹窗给出网速 / 代理延迟 / 限流的检测结果。`
             })())
             : null) : null,
         toast ? h('div', { key: toast.id, 'data-pg-toast': '', 'data-tone': toast.tone }, toast.text) : null,
@@ -9883,6 +9899,17 @@ function GalleryTab2({ onScopeChanged }) {
             sumShow.tags && sumShow.tags.length ? h('div', { 'data-pg-msumtags': '' }, '本轮倾向：', ...sumShow.tags.map((t) => h('span', { key: 'mt:' + t }, t))) : null,
             sumShow.flavor ? h('div', { 'data-pg-msumcopy': '' }, sumShow.flavor) : null,
             h('div', { 'data-pg-msumnote': '' }, `预设「${sumShow.preset}」· 严格度 ${{ strict: '严格', balance: '平衡', quantity: '数量优先' }[sumShow.strictness] || '—'}${sumShow.r18 ? ` · R-18 ${sumShow.r18} 张` : ''}`),
+            (() => {
+              const ns = []
+              if (sumShow.net) ns.push(sumShow.net)
+              if (Array.isArray(sumShow.rows)) for (const r of sumShow.rows) if (r && r.net && ns.indexOf(r.net) < 0) ns.push(r.net)
+              if (!ns.length) return null
+              const ways = [...new Set(ns.map((x) => x.route ? '经代理 ' + x.route : '直连'))]
+              const last = ns[ns.length - 1]
+              const tries = Array.isArray(last.tries) ? last.tries : []
+              return h('div', { 'data-pg-msumnote': '' },
+                `访问 pixiv：${ways.join(' / ')}${tries.length > 1 ? '（换路：' + tries.map((x) => x.route + (x.ok ? ' ✓' : ' ✗')).join(' → ') + '）' : ''}${ns.length > 1 && ways.length > 1 ? ' · 中途换过线路' : ''}`)
+            })(),
             sumShow.slow ? h('div', { 'data-pg-msumnote': '' }, '⚠️ 有轮次明显偏慢：关掉这张总结后，接着给你网络 / VPN / pixiv 限流的诊断和优化建议。') : null,
             h('div', { 'data-pg-achfoot': '' },
               h('button', { 'data-pg-btn': '', 'data-primary': '', onClick: () => { closeSum(); setView('rounds'); setCollect('all'); setQ(''); setRoundPg(0); try { window.scrollTo(0, 0) } catch { /* ignore */ } } }, '去看看新卡片')))) : null,
@@ -9922,6 +9949,32 @@ function GalleryTab2({ onScopeChanged }) {
         advice ? h('div', { 'data-pg-modal': '', 'data-pg-advice': '' },
           h('div', { 'data-pg-sheet': '', 'data-pg-gatesheet': '', onClick: (e) => e.stopPropagation() },
             h('div', { 'data-pg-gatetitle': '' }, advice.kind === 'dep' ? '缺刷Pixiv 插件' : advice.kind === 'block' ? (advice.reachable !== false && advice.loginOk === false ? '账号未登录' : '现在大概率抓不到图') : (advice.got ? '这轮跑得很慢' : '这一轮一张都没抓到')),
+            (() => {
+              const a = advice
+              const tt = a.timings
+              if (a.kind !== 'slow' || !tt) return null
+              const sec = (ms) => (Number(ms) || 0) >= 1000 ? ((Number(ms) || 0) / 1000).toFixed(1) + ' 秒' : Math.round(Number(ms) || 0) + ' ms'
+              const defs = [['searchMs', '搜索'], ['looseMs', '宽松扫描'], ['singleMs', '逐张检测'], ['judgeMs', '本地筛选'], ['thumbMs', '缩略图'], ['writeMs', '写盘']]
+              const parts = defs.map(([k, n]) => [n, Number(tt[k]) || 0]).filter((x) => x[1] > 0)
+              const total = Number(tt.totalMs) || Number(a.ms) || 0
+              if (!parts.length || total < 35000) return null
+              const max = parts.slice().sort((x, y) => y[1] - x[1])[0]
+              const pct = Math.max(1, Math.round((max[1] / total) * 100))
+              const netish = max[0] === '搜索' || max[0] === '宽松扫描' || max[0] === '逐张检测' || max[0] === '缩略图'
+              const route = (a.diag && a.diag.net && a.diag.net.route) || a.proxy || ''
+              const throttled = Boolean(a.diag && a.diag.pixiv && a.diag.pixiv.throttled)
+              const fix = netish
+                ? (route
+                  ? `这项的时间都花在 pixiv 出口上 —— 现在走代理 ${route}${throttled ? '，而且已经被限流' : ''}：换一个节点再跑；节点换不了就等 10–20 分钟。`
+                  : `这项的时间都花在 pixiv 出口上 —— 现在是直连${throttled ? '，而且已经被限流' : ''}：先查本地网络 / 路由器 / 运营商；直连 pixiv 本来就容易被限流，挂上代理会更稳。`)
+                : '这项是本地算力（排序、去重、写盘），和网络无关：把每轮张数调小，或关掉严格模式 / AI 逐张看图，能直接省掉这段时间。'
+              return h('div', { 'data-pg-slowhot': '' },
+                h('span', { 'data-k': '' }, '最耗时'),
+                h('b', {}, max[0]),
+                h('em', {}, sec(max[1])),
+                h('span', { 'data-pct': '' }, `占这轮 ${pct}%`),
+                h('span', { 'data-fix': '' }, fix))
+            })(),
             h('div', { 'data-pg-gatenote': '' }, (() => {
               const a = advice
               const L = []
@@ -9961,7 +10014,7 @@ function GalleryTab2({ onScopeChanged }) {
                 L.push('处理办法：连上 VPN → 浏览器打开 pixiv.net 确认不是验证页 → 再回来点跑一轮。')
                 return L
               }
-              L.push(`扫描 ${a.scanned} 件、用时 ${Math.round((a.ms || 0) / 1000)} 秒，保存 ${a.got} 件（预检 ${a.pre || 0} ms${a.proxy ? '，代理 ' + a.proxy : ''}）。`)
+              L.push(`扫描 ${a.scanned} 件、用时 ${Math.round((a.ms || 0) / 1000)} 秒，保存 ${a.got} 件（预检 ${a.pre || 0} ms，${a.proxy ? '经代理 ' + a.proxy : '直连'}）。`)
               const tt = a.timings || null
               if (tt) {
                 const sec = (ms) => (Number(ms) || 0) >= 1000 ? ((Number(ms) || 0) / 1000).toFixed(1) + ' 秒' : Math.round(Number(ms) || 0) + ' ms'
@@ -9969,11 +10022,6 @@ function GalleryTab2({ onScopeChanged }) {
                 const parts = defs.map(([k, n]) => [n, Number(tt[k]) || 0]).filter((x) => x[1] > 0)
                 const total = Number(tt.totalMs) || a.ms || 0
                 if (parts.length) L.push('耗时拆分：' + parts.map(([n, ms]) => n + ' ' + sec(ms)).join(' · ') + ' · 总计 ' + sec(total) + '。')
-                const max = parts.slice().sort((x, y) => y[1] - x[1])[0]
-                if (total > 35000 && max) {
-                  const net = max[0] === '搜索' || max[0] === '宽松扫描' || max[0] === '逐张检测' || max[0] === '缩略图'
-                  L.push(`主要耗时在「${max[0]}」：${net ? '网络 / pixiv 接口等待（搜索、作品详情、缩略图下载）' : '本地筛选（判断、排序、去重），不是网络'}。`)
-                }
               }
               if (a.slowdown) L.push('抓图中途明显变慢：后半段单件耗时超过前半段 2 倍，通常是限流或节点抖动。')
               const d = a.diag
@@ -9981,8 +10029,11 @@ function GalleryTab2({ onScopeChanged }) {
               if (d.speedMbps != null) L.push(`本机下载速度：${d.speedMbps} Mbps${d.speedMbps < 8 ? '（偏慢，建议换网络或节点）' : '（正常）'}`)
               else L.push('网速没测出来' + (d.speedErr ? '：' + d.speedErr : '') + '。')
               const v = d.vpn || {}
-              if (v.ok && v.ms != null) L.push(`VPN 到 pixiv 的实际延迟：${v.ms} ms${v.proxy ? '（' + v.proxy + '）' : ''}${v.ms > 1200 ? '（很高，建议换节点）' : ''}`)
-              else L.push('VPN 探测失败' + (v.error ? '：' + v.error : '') + ((v.ports && v.ports.length) ? `（检测到代理端口 ${v.ports.join('/')}，但连不通）` : '（没发现正在监听的代理端口，VPN 可能掉了）'))
+              if (v.ok && v.ms != null) L.push(`${v.direct ? 'pixiv 直连的实际延迟' : '经代理到 pixiv 的实际延迟'}：${v.ms} ms${v.proxy ? '（' + v.proxy + '）' : ''}${v.ms > 1200 ? (v.direct ? '（很高：先查本地网络 / 路由器）' : '（很高，建议换节点）') : ''}`)
+              else L.push('pixiv 连通性探测失败' + (v.error ? '：' + v.error : '') + ((v.ports && v.ports.length) ? `（检测到代理端口 ${v.ports.join('/')}，但连不通）` : '（没发现正在监听的代理端口，VPN 可能掉了；直连也没通）'))
+              const n2 = d.net || {}
+              const tn = Array.isArray(n2.tries) ? n2.tries : []
+              L.push(`访问 pixiv 的方式：${n2.route ? '经代理 ' + n2.route : '直连'}${tn.length > 1 ? '（换路轨迹：' + tn.map((x) => x.route + (x.ok ? ' ✓' : ' ✗')).join(' → ') + '）' : ''}；预检 ${a.pre || 0} ms。`)
               const px = d.pixiv || {}
               if (px.throttled) L.push(`pixiv 连测 3 次：${px.empty} 次返回空结果 → 大概率在对当前出口 IP 限流。`)
               else L.push(`pixiv 连测 3 次正常（平均 ${px.ms == null ? '-' : px.ms} ms）。`)

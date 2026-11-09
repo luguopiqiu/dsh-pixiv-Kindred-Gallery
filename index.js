@@ -166,7 +166,7 @@ import { buildTaste } from './lib/taste.mjs'
 import { analyzeStyleProfile } from './lib/vision.mjs'
 import { allPresets, activePreset, savePreset, deletePreset, presetToScrollPatch, normalizePreset } from './lib/presets.mjs'
 import { pageImage, pageImageFull, workMeta, authorLatest, prunePageCache, setCredentialSource, ensureUgoiraFrames, isUgoira, ugoiraFrame, setZipTool, thumbImage, pixivHeaders } from './lib/pixivpages.mjs'
-import { proxiedRequest, proxiedGet, proxiedJson, netStats, detectProxy } from './lib/net.mjs'
+import { proxiedRequest, proxiedGet, proxiedJson, netStats, detectProxy, currentRoute, routeReport } from './lib/net.mjs'
 import { ensureThumb } from './lib/thumbs.mjs'
 import {
   GALLERY_WORKSPACE_NAME, GALLERY_WORKSPACE_TITLE, GALLERY_WORKSPACE_LEGACY,
@@ -184,7 +184,7 @@ const MAX_BODY = 1024 * 1024
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const WORK_CONCURRENCY = Math.max(1, Number(process.env.PIXIV_GALLERY_WORK_CONCURRENCY) || 3)
 
-const GALLERY_VERSION = '1.0.1'
+const GALLERY_VERSION = '1.0.2'
 const GALLERY_REPO = 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery'
 
 function bad(status, error, extra = {}) {
@@ -696,36 +696,26 @@ const probeNetwork = async () => {
     const ports = [7890, 7891, 7897, 10809, 1080, 8080]
     const open = []
     for (const p of ports) { if (await portOpen(p)) open.push(p) }
-    const candidates = []
-    if (want) candidates.push(want)
-    for (const p of open) { const u = 'http://127.0.0.1:' + p; if (!candidates.includes(u)) candidates.push(u) }
-    candidates.push('') // 直连
-    // 单独测一次直连，方便说明现在靠的是代理还是直连
-    const directProbe = await (async () => {
-      const rr = await runCmd(curlPath(), ['-sS', '-I', '-L', '-o', process.platform === 'win32' ? 'NUL' : '/dev/null',
-        '-w', '%{http_code}', '--max-time', '5', 'https://www.pixiv.net/'], { timeout: 7000 })
-      if (!rr.ok) return false
-      const st = Number(String(rr.out || '').trim())
-      return st >= 200 && st < 400
-    })()
-    let last = null
-    for (const proxy of candidates) {
-      const args = ['-sS', '-I', '-L', '-o', process.platform === 'win32' ? 'NUL' : '/dev/null',
-        '-w', '%{http_code} %{time_namelookup} %{time_connect} %{time_appconnect} %{time_starttransfer}',
-        '--max-time', '8', ...(proxy ? ['--proxy', proxy] : []), 'https://www.pixiv.net/']
-      const r = await runCmd(curlPath(), args, { timeout: 11000 })
-      if (!r.ok) { last = (r.err || '请求失败').slice(0, 160); continue }
-      const m = String(r.out || '').trim().match(/(\d{3})\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)$/)
-      if (!m) { last = '无法读取延迟'; continue }
-      const status = Number(m[1])
-      if (!(status >= 200 && status < 400)) { last = 'pixiv 返回 ' + status; continue }
-      const connect = Number(m[3]) * 1000
-      const tls = Number(m[4]) * 1000
-      const ttfb = Number(m[5]) * 1000
-      const ms = Math.round(Math.max(0, ttfb >= connect ? ttfb : connect + tls))
-      return { ok: true, ms, status, proxy: proxy || '', direct: !proxy, directOk: directProbe, vpnPorts: open }
+    /* 和真正抓图走同一条链路（routeRequest：直连优先 → 代理 → 报错），
+       这样「检测 pixiv 连接」显示的路由，就是这一轮实际会走的那一条 */
+    const t0 = Date.now()
+    try {
+      const res = await proxiedGet('https://www.pixiv.net/robots.txt', { headers: pixivHeaders('https://www.pixiv.net/'), timeout: 15000 })
+      const ms = Date.now() - t0
+      if (!(res.status >= 200 && res.status < 400)) {
+        return { ok: false, error: 'pixiv 返回 ' + res.status, ms, proxy: '', route: '', direct: false, vpnPorts: open, configProxy: want, routes: routeReport() }
+      }
+      const route = currentRoute()
+      return { ok: true, ms, status: res.status, proxy: route, route, direct: !route, directOk: !route, vpnPorts: open, configProxy: want, routes: routeReport() }
+    } catch (e) {
+      const msg = String(e?.message ?? e).slice(0, 200)
+      return {
+        ok: false, error: msg, ms: Date.now() - t0,
+        timeout: /超时|timed out|ETIMEDOUT/i.test(msg),
+        proxy: '', route: '', direct: false,
+        vpnPorts: open, configProxy: want, routes: routeReport(),
+      }
     }
-    return { ok: false, error: last || '连接失败', directOk: directProbe, vpnPorts: open, configProxy: want }
   }
 
   /**
@@ -2116,9 +2106,24 @@ const routes = {
           const w = encodeURIComponent('ロリ')
           const url = 'https://www.pixiv.net/ajax/search/artworks/' + w + '?word=' + w + '&order=date_d&mode=all&p=1&s_mode=s_tag&type=all&lang=zh'
           const j = await proxiedJson(url, { headers: pixivHeaders() })
+          const ms = Date.now() - t
           const n = ((j && j.body && j.body.illustManga && j.body.illustManga.data) || []).length
-          push('pixiv', j && j.error === false && n > 0, n > 0 ? ('pixiv 连接正常，首屏返回 ' + n + ' 条（' + (Date.now() - t) + 'ms）') : 'pixiv 返回空列表（可能被 429 限流）')
-        } catch (e) { push('pixiv', false, '连接失败：' + (e && e.message ? e.message : e)) }
+          const route = (() => { try { return currentRoute() } catch { return '' } })()
+          const tries = (() => { try { return routeReport() } catch { return [] } })()
+          const trail = Array.isArray(tries) && tries.length > 1
+            ? `；换路：${tries.map((x) => x.route + (x.ok ? ' ✓' : ' ✗ ' + String(x.error || '').slice(0, 40))).join(' → ')}`
+            : ''
+          const way = route ? `经代理 ${route}` : '直连'
+          push('pixiv', j && j.error === false && n > 0, n > 0
+            ? (`pixiv 连接正常（${way}），首屏返回 ${n} 条（${ms}ms）${trail}`)
+            : (`pixiv 返回空列表（${way}，${ms}ms）—— 可能被限流，换个节点或等 10–20 分钟${trail}`))
+        } catch (e) {
+          const tries = (() => { try { return routeReport() } catch { return [] } })()
+          const trail = Array.isArray(tries) && tries.length
+            ? `（试过：${tries.map((x) => x.route + (x.ok ? ' ✓' : ' ✗ ' + String(x.error || '').slice(0, 40))).join(' → ')}）`
+            : ''
+          push('pixiv', false, '直连和代理都没连上 pixiv：' + (e && e.message ? e.message : e) + trail)
+        }
         // 2) 刷Pixiv 依赖：和 /status 用同一套判据（config.json + credential.json + 登录态），
         //    别再拿早已不存在的 state.json 当门神——那会让这一步永远报红。
         const cfgOk = existsSync(join(pixiv, 'config.json'))
@@ -3119,7 +3124,9 @@ const routes = {
             libraryWorks,
             dryRun,
             visionSelect: async (args) => (await loadVision()).scoreWorks(ctx, { home, ...args, log }),
-            onProgress: (pg) => { fastProg = { ...pg, running: true, updatedAt: Date.now() } },
+            onProgress: (pg) => {
+              fastProg = { ...pg, running: true, updatedAt: Date.now(), net: { route: (() => { try { return currentRoute() } catch { return '' } })(), tries: (() => { try { return routeReport() } catch { return [] } })() } }
+            },
           })
         } catch (e) {
           fastProg = { ...(fastProg || {}), running: false, phase: 'error', error: String(e?.message ?? e).slice(0, 200), updatedAt: Date.now() }
@@ -3153,7 +3160,10 @@ const routes = {
             save()
           }
         } catch { /* 上色失败不影响这一轮 */ }
-        return ok({ ...res, ms: Date.now() - t0, preset: preset.name, skipCount: skip.size })
+        /* 这一轮真正走了哪条路：直连还是某个代理，以及中间换过几次 */
+        const routeNow = (() => { try { return currentRoute() } catch { return '' } })()
+        const tries = (() => { try { return routeReport() } catch { return [] } })()
+        return ok({ ...res, ms: Date.now() - t0, preset: preset.name, skipCount: skip.size, net: { route: routeNow, direct: !routeNow, tries } })
       },
     },
 
@@ -3668,6 +3678,12 @@ const routes = {
           }
         }
         let hint = reason
+        /* 这次请求到底试了哪几条路、各自什么错——远程排查全靠这一行 */
+        let routes = []
+        try { routes = routeReport() } catch { routes = [] }
+        const routeLine = routes.length
+          ? '｜路由：' + routes.map((r) => r.route + '（' + r.error + '）').join(' → ')
+          : ''
         if (!reachable && vpn && vpn.required && !vpn.portOpen) {
           hint = 'VPN 没开：刷Pixiv 配置的代理 ' + vpn.host + ':' + vpn.port + ' 没有在监听'
             + (vpn.autoStart && vpn.exeExists ? '（配置了自动拉起，可以直接点「启动 VPN 并重试」）' : '（刷Pixiv 设置 → 网络 里填好代理软件路径并打开自动拉起）')
@@ -3677,18 +3693,19 @@ const routes = {
           else hint = '本机没发现可用的代理端口（VPN 可能没开），直连也连不上 pixiv'
           if (net.error) hint += '（' + String(net.error).slice(0, 90) + '）'
         }
+        if (!reachable) hint += routeLine
         if (reachable && !loginOk) {
           hint = 'pixiv 已连通，但账号未登录或登录已失效：请先在刷Pixiv 插件里重新登录账号'
         }
+        /* 显示这一轮真正走通的路由：代理地址或空（直连）。
+           旧写法读 detectProxy() 返回的字符串再取 .type，永远是空——预检一直谎报「直连」。 */
         let proxy = ''
-        try {
-          const d = detectProxy()
-          proxy = (d && (d.type || d.kind || d.mode)) || ''
-        } catch { /* ignore */ }
+        try { proxy = currentRoute() || detectProxy() || '' } catch { /* ignore */ }
         const passed = reachable && loginOk
         return ok({
           ok: passed, reachable, loginOk, user, loginError,
           ms: Date.now() - t0, proxy,
+          routes,
           reason: passed ? '' : hint,
           detail: reason,
           vpn: vpn ? { required: Boolean(vpn.required), proxyUrl: vpn.proxyUrl, host: vpn.host, port: vpn.port, portOpen: Boolean(vpn.portOpen), autoStart: Boolean(vpn.autoStart), exe: vpn.exe, exeExists: Boolean(vpn.exeExists), waitSec: vpn.waitSec } : null,
@@ -3976,13 +3993,25 @@ const routes = {
         const okProbes = probes.filter((x) => x.ok)
         const pixivMs = okProbes.length ? Math.round(okProbes.reduce((a, b) => a + b.ms, 0) / okProbes.length) : null
         const throttled = okProbes.length === 0 || empty >= 2
+        const routeNow = (() => { try { return currentRoute() } catch { return '' } })()
+        const tries = (() => { try { return routeReport() } catch { return [] } })()
+        const advice = throttled
+          ? (routeNow
+            ? 'pixiv 很可能在限流这个出口 IP：换一个节点（当前 ' + routeNow + '），或等 10–20 分钟再跑'
+            : '当前是直连，pixiv 对直连更容易限流：建议挂上代理再跑，或等 10–20 分钟')
+          : (pixivMs != null && pixivMs > 1500
+            ? (routeNow
+              ? 'pixiv 接口平均 ' + pixivMs + ' ms 偏慢：换个节点（当前 ' + routeNow + '），或换一个负载低一点的时间段'
+              : 'pixiv 接口平均 ' + pixivMs + ' ms 偏慢（直连）：检查本地网络 / 路由器，或改用代理')
+            : '')
         return ok({
           at: Date.now(),
           speedMbps,
           speedErr,
+          net: { route: routeNow, direct: !routeNow, tries, vpnPorts: probe?.vpnPorts || [] },
           vpn: { ok: Boolean(probe?.ok), ms: probe?.ms ?? null, proxy: probe?.proxy || '', direct: Boolean(probe?.direct), ports: probe?.vpnPorts || [], error: probe?.error || '' },
           pixiv: { ms: pixivMs, empty, probes, throttled },
-          advice: throttled ? 'pixiv 很可能在限流这个出口 IP：换个节点，或等 10–20 分钟再跑' : '',
+          advice,
         })
       },
     },
