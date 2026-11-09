@@ -143,6 +143,10 @@ window.__ModuleLoader__.load({
             h('br'),
             `GitHub Star：${info.stars ?? '—'}　｜　`,
             h('a', { href: info.url || info.repo, target: '_blank', rel: 'noreferrer', 'data-pg-link': '' }, '在浏览器打开仓库')),
+          info.fallback ? h('div', {
+            'data-pg-note2': '',
+            style: { marginTop: '6px', color: '#fbbf24' },
+          }, 'GitHub 接口被限流，已自动改走备用通道读取（Star 数与提交号可能稍旧，不影响安装）。') : null,
           notes.length ? h('div', {
             'data-pg-updnotes': '',
             style: { marginTop: '12px', maxHeight: '240px', overflow: 'auto', padding: '10px 12px', borderRadius: '10px', background: 'rgba(148,163,184,.08)', lineHeight: 1.7 },

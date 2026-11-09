@@ -845,6 +845,58 @@ const probeNetwork = async () => {
     return { projectUrl, owner: m[1], repo: m[2].replace(/\.git$/i, '') }
   }
 
+  /** README「更新日志」里某一版那一节 → 给弹窗当改动说明（没发 Release 时用） */
+  const notesFromReadme = (text, want) => {
+    const lines = String(text || '').split(/\r?\n/)
+    let start = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      const m = /^###\s+(.+)$/.exec(lines[i])
+      if (m && (!want || String(m[1]).includes(want))) { start = i; break }
+    }
+    if (start < 0) return []
+    const body = []
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^###\s/.test(lines[i]) || /^##\s/.test(lines[i])) break
+      const s = lines[i].trim()
+      if (!s) continue
+      body.push(s.replace(/^[-*]\s+/, '· ').replace(/\*\*/g, ''))
+    }
+    return body.slice(0, 14)
+  }
+
+  /** 远程版本号：GitHub API 优先；匿名额度用完（403/429）时退到 raw.githubusercontent，那边不限流 */
+  const remoteVersionOf = async (t, branch) => {
+    try {
+      const raw = await fetchJson(`https://api.github.com/repos/${t.owner}/${t.repo}/contents/package.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
+      const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
+      const v = stripVer(JSON.parse(text)?.version || '')
+      if (v) return v
+    } catch { /* 落到 raw */ }
+    const res = await proxiedGet(`https://raw.githubusercontent.com/${t.owner}/${t.repo}/${encodeURIComponent(branch)}/package.json?t=${Date.now()}`, { timeout: 15000 })
+    if (res.status !== 200) throw new Error(`读取远程版本失败（HTTP ${res.status}）`)
+    return stripVer(JSON.parse(res.body.toString('utf8'))?.version || '')
+  }
+
+  /** 仓库概览：API → ungh.cc 镜像（无 token、不限流，Star 数与推送时间够用） */
+  const remoteRepoInfo = async (t) => {
+    try {
+      return { info: await fetchJson(`https://api.github.com/repos/${t.owner}/${t.repo}`), fallback: false }
+    } catch {
+      const alt = await proxiedJson(`https://ungh.cc/repos/${t.owner}/${t.repo}`, { timeout: 15000 })
+      const r = alt?.repo || {}
+      return {
+        info: {
+          default_branch: String(r.defaultBranch || r.default_branch || 'main'),
+          stargazers_count: Number(r.stars) || 0,
+          forks_count: Number(r.forks) || 0,
+          html_url: `https://github.com/${t.owner}/${t.repo}`,
+          pushed_at: String(r.pushedAt || r.updatedAt || ''),
+        },
+        fallback: true,
+      }
+    }
+  }
+
   /** 用刷 Pixiv 的登录 cookie 读自己的收藏/关注；只读，不改 Pixiv 数据。 */
   /**
    * 读 pixiv 网页的 ajax 接口（收藏状态、作品详情校验）。
@@ -2014,18 +2066,15 @@ const routes = {
         }
         const apiBase = `https://api.github.com/repos/${t.owner}/${t.repo}`
         try {
-          const info = await fetchJson(apiBase)
+          /* API 被限流（本机／共享出口 IP 都可能）时自动降级：概览走 ungh.cc、版本与 README 走 raw，
+             宁可少一个提交号，也别让「检查更新」变成一个红色错误。 */
+          const { info, fallback } = await remoteRepoInfo(t)
           const branch = String(info?.default_branch || 'main')
           let rel = null
-          try { rel = await fetchJson(`${apiBase}/releases/latest`) } catch { /* 没有 release 不算失败 */ }
+          if (!fallback) { try { rel = await fetchJson(`${apiBase}/releases/latest`) } catch { /* 没有 release 不算失败 */ } }
           let commit = null
-          try { commit = await fetchJson(`${apiBase}/commits/${encodeURIComponent(branch)}`) } catch { /* ignore */ }
-          let remoteVersion = ''
-          try {
-            const raw = await fetchJson(`${apiBase}/contents/package.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
-            const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
-            remoteVersion = stripVer(JSON.parse(text)?.version || '')
-          } catch { /* 拿不到远程版本也不失败 */ }
+          if (!fallback) { try { commit = await fetchJson(`${apiBase}/commits/${encodeURIComponent(branch)}`) } catch { /* ignore */ } }
+          const remoteVersion = await remoteVersionOf(t, branch).catch(() => '')
           const latest = String(rel?.tag_name || rel?.name || (remoteVersion ? 'v' + remoteVersion : ''))
           let notes = []
           let noteSource = ''
@@ -2035,28 +2084,19 @@ const routes = {
           }
           if (!notes.length) {
             /* 没有 Release body：从 README 的更新日志里抠出这一版那一节 —— 给人看的是人话，不是提交号 */
+            let text = ''
             try {
               const raw = await fetchJson(`${apiBase}/contents/README.md?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
-              const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
-              const want = stripVer(latest)
-              const lines = text.split(/\r?\n/)
-              let start = -1
-              for (let i = 0; i < lines.length; i += 1) {
-                const m2 = /^###\s+(.+)$/.exec(lines[i])
-                if (m2 && (!want || String(m2[1]).includes(want))) { start = i; break }
-              }
-              if (start >= 0) {
-                const body = []
-                for (let i = start + 1; i < lines.length; i += 1) {
-                  if (/^###\s/.test(lines[i]) || /^##\s/.test(lines[i])) break
-                  const s = lines[i].trim()
-                  if (!s) continue
-                  body.push(s.replace(/^[-*]\s+/, '· ').replace(/\*\*/g, ''))
-                }
-                notes = body.slice(0, 14)
-                noteSource = 'README'
-              }
-            } catch { /* ignore */ }
+              text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
+            } catch { /* 落到 raw */ }
+            if (!text) {
+              try {
+                const res = await proxiedGet(`https://raw.githubusercontent.com/${t.owner}/${t.repo}/${encodeURIComponent(branch)}/README.md?t=${Date.now()}`, { timeout: 15000 })
+                if (res.status === 200) text = res.body.toString('utf8')
+              } catch { /* ignore */ }
+            }
+            const got = notesFromReadme(text, stripVer(latest))
+            if (got.length) { notes = got; noteSource = 'README' }
           }
           if (!notes.length && commit?.commit?.message) {
             notes = String(commit.commit.message).split(/\r?\n/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
@@ -2076,6 +2116,7 @@ const routes = {
             url: info?.html_url || t.projectUrl,
             repo: t.projectUrl,
             branch,
+            fallback,
             at: Date.now(),
           }
           state.config.githubStars = payload.stars
@@ -2098,16 +2139,14 @@ const routes = {
         const t = ghTarget()
         if (!t) return bad(400, '项目地址不是 GitHub 仓库')
         const dryRun = Boolean(body?.dryRun)
-        const apiBase = `https://api.github.com/repos/${t.owner}/${t.repo}`
         const srcDir = dirname(fileURLToPath(import.meta.url))
         let remoteVersion = ''
         let branch = String(body?.branch || 'main')
         try {
-          const info = await fetchJson(apiBase)
-          branch = String(body?.branch || info?.default_branch || 'main')
-          const raw = await fetchJson(`${apiBase}/contents/package.json?ref=${encodeURIComponent(branch)}&t=${Date.now()}`)
-          const text = raw?.content ? Buffer.from(String(raw.content).replace(/\s/g, ''), 'base64').toString('utf8') : ''
-          remoteVersion = stripVer(JSON.parse(text)?.version || '')
+          /* 限流时 remoteRepoInfo 会给出默认分支，版本号再由 remoteVersionOf 从 raw 兜底拿 */
+          const probe = await remoteRepoInfo(t).catch(() => null)
+          branch = String(body?.branch || probe?.info?.default_branch || 'main')
+          remoteVersion = await remoteVersionOf(t, branch)
         } catch (e) {
           if (!dryRun) return bad(502, `读取远程版本失败：${String(e?.message ?? e).slice(0, 160)}`)
         }
