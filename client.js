@@ -1744,13 +1744,13 @@ a[data-pg-btn]{text-decoration:none;display:inline-flex;align-items:center;}
 [data-pg-score]:hover{background:rgba(59,130,246,.14);}
 [data-pg-score][data-on]{background:#3b82f6;border-color:#3b82f6;color:#fff;font-weight:700;}
 [data-pg-score][data-clear]{font-size:10px;color:var(--dsw-alias-label-tertiary,#8b919a);}
-[data-pg-modal]{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;padding:22px 14px;overflow:auto;backdrop-filter:blur(3px);}
+[data-pg-modal]{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;padding:38px 14px 24px;overflow:auto;backdrop-filter:blur(3px);}
 [data-pg-settings-sheet]{overflow-anchor:none;scroll-behavior:auto;}
 [data-pg-sethead]{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:10px;padding:10px 0 10px;margin:-10px 0 2px;background:var(--dsw-alias-bg-layer-1,#171a20);border-bottom:1px solid rgba(127,127,127,.18);}
 [data-pg-setx]{flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid rgba(127,127,127,.35);background:rgba(127,127,127,.12);color:var(--dsw-alias-label-primary,#e5e7eb);font-size:19px;line-height:1;cursor:pointer;transition:background .15s,border-color .15s,transform .12s;}
 [data-pg-setx]:hover{background:rgba(239,68,68,.22);border-color:rgba(239,68,68,.55);color:#fff;}
 [data-pg-setx]:active{transform:scale(.94);}
-[data-pg-sheet]{width:min(1180px,100%);max-height:calc(100vh - 44px);overflow:auto;background:var(--dsw-alias-bg-layer-1,#171a20);border:1px solid rgba(127,127,127,.30);border-radius:16px;overflow-x:hidden;box-shadow:0 24px 80px rgba(0,0,0,.55);}
+[data-pg-sheet]{width:min(1180px,100%);max-height:calc(100vh - 96px);overflow:auto;background:var(--dsw-alias-bg-layer-1,#171a20);border:1px solid rgba(127,127,127,.30);border-radius:16px;overflow-x:hidden;box-shadow:0 24px 80px rgba(0,0,0,.55);}
 [data-pg-banner]{position:relative;height:240px;overflow:hidden;background:linear-gradient(135deg,rgba(59,130,246,.2),rgba(168,85,247,.16));}
 [data-pg-banner] img{width:100%;height:100%;object-fit:cover;display:block;opacity:.9;}
 [data-pg-banner] .shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.06),rgba(0,0,0,.72));}
