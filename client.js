@@ -6092,7 +6092,8 @@ function TagLab({ say }) {
   const [favs, setFavs] = React.useState([])
   const [autos, setAutos] = React.useState([])
   const [manuals, setManuals] = React.useState([])
-  const reloadStats = () => api('/tag/stats').then((r) => setStats(Array.isArray(r?.items) ? r.items : [])).catch(() => {})
+  /* favOnly = 只有喜爱标签、库里还没有作品的占位行，标签墙不显示它们（保持「作品数/均分」的含义） */
+  const reloadStats = () => api('/tag/stats').then((r) => setStats((Array.isArray(r?.items) ? r.items : []).filter((it) => !it.favOnly))).catch(() => {})
   const reload = () => api('/tags/dynamic').then((r) => {
     setRecent(Array.isArray(r?.recentTags) ? r.recentTags : [])
     setTargets(Array.isArray(r?.targetTags) ? r.targetTags : [])
@@ -6559,7 +6560,12 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
   const [avgVal, setAvgVal] = React.useState('')
   const [tagMsg, setTagMsg] = React.useState('')
   const loadTagStats = React.useCallback(async () => {
-    try { const r = await api('/tag/stats'); setTagStats(r?.items || []) } catch (e) { setTagMsg(String(e?.message ?? e)) }
+    try {
+      const r = await api('/tag/stats')
+      setTagStats(r?.items || [])
+      /* 服务端顺带返回完整的喜爱标签列表：增删之后靠它同步，避免本地列表过期导致新增不显示/已删的残留 */
+      if (Array.isArray(r?.favorites)) setTagFavs(r.favorites)
+    } catch (e) { setTagMsg(String(e?.message ?? e)) }
   }, [])
 
   const addFavTag = async (name) => {
@@ -6570,7 +6576,10 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
     try {
       const r = await api('/tags/fav', { tag: t, on: true })
       setTagAdd('')
-      setTagMsg('已加入喜爱标签：「' + t + '」（现在共 ' + ((r?.favorites || []).length) + ' 条）')
+      /* 先把喜爱标签列表同步过来，列表的过滤依赖它；再拉统计，新加的标签会随统计一起回来 */
+      if (Array.isArray(r?.favorites)) setTagFavs(r.favorites)
+      else setTagFavs((cur) => (cur.some((x) => String(x).toLowerCase() === t.toLowerCase()) ? cur : [...cur, t]))
+      setTagMsg('已加入喜爱标签：「' + t + '」（现在共 ' + ((r?.favorites || []).length || (tagFavs.length + 1)) + ' 条）')
       await loadTagStats()
     } catch (e) { setTagMsg(String(e?.message ?? e)) } finally { setTagBusy(false) }
   }
@@ -6907,7 +6916,7 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
         } catch { /* 画像读取失败也允许保存纯标签预设 */ }
         const next = [...presets.filter((x) => x.name !== nm), {
           id, name: nm, favoriteTags: tagList(), runKeywords, runBlacklist,
-          scoreStops, tagStats: tagStats.map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg, weight: x.weight })),
+          scoreStops, tagStats: tagStats.filter((x) => !x.favOnly).map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg, weight: x.weight })),
           taste, tasteStyle: taste?.style || null, tasteTags: (taste?.tags || []).filter((x) => Number(x.weight) > 0.05).map((x) => x.tag).slice(0, 40),
           createdAt: Date.now(),
         }].slice(0, 50)
@@ -6930,7 +6939,7 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
           runKeywords,
           runBlacklist,
           scoreStops,
-          tagStats: tagStats.map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg })),
+          tagStats: tagStats.filter((x) => !x.favOnly).map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg })),
           taste,
           exportedAt: new Date().toISOString(),
         }
@@ -7633,12 +7642,24 @@ const presetBox = h('div', { 'data-pg-box': 'preset' },
               h('button', { 'data-pg-btn': '', 'data-pink': '', disabled: tagBusy, onClick: () => addFavTag(), style: { flex: '0 0 auto', width: 'auto', padding: '0 16px' } }, tagBusy ? '添加中…' : '添加到喜爱标签')),
             h('div', { 'data-pg-note': '' }, '这里只列出你真正喜爱的标签；天蓝底＝你手动加入的（亲手点或亲手打进去的），粉底＝动态规则自动加入的，灰底＝来自导入的偏好预设（三种在推荐公式里权重相同，只做显示区分）。点当前均分就能手动改（+N 是手动改过几次，只显示、不写进预设），勾选可以批量删除。想找没收藏的标签请到下面的「全部标签」墙里点。列表可上下滚动；R-18 / R-18G / AI生成 只做统计，单独放在下面「特殊标签数据统计」里。'),
             (() => {
-              if (!tagStats.length) return h('div', { 'data-pg-note': '' }, '还没有标签统计')
+              if (!tagStats.length && !(tagFavs || []).length) return h('div', { 'data-pg-note': '' }, '还没有标签统计')
               const qq = tagQ2.trim().toLowerCase()
               const match = (it) => !qq || it.tag.toLowerCase().includes(qq)
               const favSet = new Set((tagFavs || []).map((t) => String(t).toLowerCase()))
-              const rest = tagStats.filter((it) => !it.special && favSet.has(String(it.tag).toLowerCase()) && match(it))
-                .sort((a, b) => (tagSort === 'works' ? b.works - a.works : tagSort === 'rated' ? b.rated - a.rated : (b.avg ?? -1) - (a.avg ?? -1)))
+              const rows = tagStats.filter((it) => !it.special && favSet.has(String(it.tag).toLowerCase()) && match(it))
+              /* 兜底：刚手动加入、统计里还没来得及出现的标签也补进列表，保证「添加后立刻能看到」 */
+              const seen = new Set(rows.map((it) => String(it.tag).toLowerCase()))
+              for (const t of (tagFavs || [])) {
+                const name = String(t || '').trim()
+                const k = name.toLowerCase()
+                if (!name || seen.has(k) || isSpecialTagName(name) || (qq && !k.includes(qq))) continue
+                seen.add(k)
+                rows.push({ tag: name, works: 0, rated: 0, avg: null, manualN: 0, source: 'manual' })
+              }
+              /* 还没有任何作品/评分的（通常是刚加进来的标签）排最前，免得沉到滚动列表底部看不见 */
+              const fresh = (it) => (!it.works && !it.rated ? 1 : 0)
+              const rest = rows
+                .sort((a, b) => fresh(b) - fresh(a) || (tagSort === 'works' ? b.works - a.works : tagSort === 'rated' ? b.rated - a.rated : (b.avg ?? -1) - (a.avg ?? -1)))
               const mk = (it) => h('div', { 'data-pg-tagrow': '', key: it.tag },
                 h('input', {
                   type: 'checkbox', checked: pickedTags.includes(it.tag), title: '勾选后可以批量删除',

@@ -3569,11 +3569,32 @@ const routes = {
           const source = manualKeys.has(key) ? 'manual' : autoKeys.has(key) ? 'auto' : (favKeys.has(key) ? 'preset' : '')
           return { tag: r.tag, works: r.works, rated: r.ratedN, avg: avg === null ? null : Math.round(avg * 10) / 10, manual: Boolean(manual), manualN: manual ? Number(manual.n || 0) : 0, special: /^(r-?18g?|ai|ai生成|ai作画)$/i.test(r.tag), auto: autoKeys.has(key), source }
         })
+        /* 手动加入的喜爱标签即使库里还没有作品 / 还没评过分，也补一行（works=0）：设置页的喜爱标签列表按这份数据渲染，
+           不补的话「添加后列表里立刻看不到」 */
+        const itemKeys = new Set(items.map((x) => tagKeyOf(x.tag)))
+        for (const raw of (state.config.favoriteTags || [])) {
+          const name = norm(String(raw || '').trim())
+          if (!name || /^(r-?18g?|ai|ai生成|ai作画)$/i.test(name)) continue
+          const key = tagKeyOf(name)
+          if (!key || itemKeys.has(key)) continue
+          itemKeys.add(key)
+          const manual = ov[name] || ov[raw]
+          const avg = manual && typeof manual.avg === 'number' ? manual.avg : null
+          items.push({
+            tag: name, works: 0, rated: 0,
+            avg: avg === null ? null : Math.round(avg * 10) / 10,
+            manual: Boolean(manual), manualN: manual ? Number(manual.n || 0) : 0,
+            special: false, auto: autoKeys.has(key),
+            source: manualKeys.has(key) ? 'manual' : autoKeys.has(key) ? 'auto' : 'preset',
+            favOnly: true,
+          })
+        }
         for (const t of ['R-18', 'R-18G', 'AI生成']) {
           if (!items.some((x) => x.tag === t)) items.push({ tag: t, works: 0, rated: 0, avg: null, manual: false, manualN: 0, special: true, auto: false })
         }
         items.sort((a, b) => (a.special ? 1 : 0) - (b.special ? 1 : 0) || b.works - a.works)
-        return ok({ items, blacklistTags: String(state.config.blacklistTags || '') })
+        const favorites = (state.config.favoriteTags || []).filter((t) => !isSpecialTagName(t))
+        return ok({ items, favorites, blacklistTags: String(state.config.blacklistTags || '') })
       },
     },
     '/tag/avg': {
