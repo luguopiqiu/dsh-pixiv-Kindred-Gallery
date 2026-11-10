@@ -1583,18 +1583,18 @@ function DoneFx({ perfect, text, tone }) {
 [data-pg-tabs]{display:flex;gap:3px;padding:3px;border-radius:10px;background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.10));}
 [data-pg-tab]{border:0;background:transparent;color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;}
 [data-pg-tab][data-on]{background:var(--dsw-alias-bg-layer-1,rgba(255,255,255,.10));color:var(--dsw-alias-label-primary,inherit);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.16);}
-[data-pg-btn]{border:1px solid var(--dsw-alias-bg-layer-3,rgba(127,127,127,.24));background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.10));color:inherit;font:inherit;font-size:12px;padding:6px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;}
+[data-pg-btn]{border:1px solid rgba(127,127,127,.34);background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.10));color:inherit;font:inherit;font-size:12px;padding:6px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;}
 [data-pg-btn]:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.2));}
 [data-pg-btn][data-primary]{background:#3b82f6;border-color:#3b82f6;color:#fff;}
 [data-pg-btn][data-danger]{color:#f87171;border-color:rgba(248,113,113,.35);}
 [data-pg-btn][disabled]{opacity:.45;cursor:default;}
 a[data-pg-btn]{text-decoration:none;display:inline-flex;align-items:center;}
-[data-pg-input]{box-sizing:border-box;border:1px solid var(--dsw-alias-bg-layer-3,rgba(127,127,127,.24));background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.10));color:inherit;font:inherit;font-size:12px;padding:7px 9px;border-radius:8px;outline:none;}
+[data-pg-input]{box-sizing:border-box;border:1px solid rgba(127,127,127,.34);background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.10));color:inherit;font:inherit;font-size:12px;padding:7px 9px;border-radius:8px;outline:none;}
 [data-pg-input]:focus{border-color:#3b82f6;}
-[data-pg-select]{box-sizing:border-box;border:1px solid var(--dsw-alias-bg-layer-3,rgba(127,127,127,.24));background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12));color:inherit;font:inherit;font-size:11px;padding:4px 5px;border-radius:7px;outline:none;}
+[data-pg-select]{box-sizing:border-box;border:1px solid rgba(127,127,127,.34);background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.12));color:inherit;font:inherit;font-size:11px;padding:4px 5px;border-radius:7px;outline:none;}
 [data-pg-loading]{font-size:16px;font-weight:700;}
 [data-pg-note]{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary,#8b919a);}
-[data-pg-savedflag]{font-size:12px;padding:3px 10px;border-radius:999px;white-space:nowrap;background:rgba(127,127,127,.14);border:1px solid rgba(127,127,127,.25);color:#cbd5e1;}
+[data-pg-savedflag]{font-size:12px;padding:3px 10px;border-radius:999px;white-space:nowrap;background:rgba(127,127,127,.14);border:1px solid rgba(127,127,127,.25);color:var(--dsw-alias-label-secondary,#cbd5e1);}
 [data-pg-savedflag][data-tone="good"]{color:#86efac;border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.12);}
 [data-pg-savedflag][data-tone="warn"]{color:#fca5a5;border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.12);}
 [data-pg-chipwrap]{display:inline-flex;align-items:center;gap:3px;}
@@ -1789,13 +1789,13 @@ a[data-pg-btn]{text-decoration:none;display:inline-flex;align-items:center;}
 [data-pg-score]:hover{background:rgba(59,130,246,.14);}
 [data-pg-score][data-on]{background:#3b82f6;border-color:#3b82f6;color:#fff;font-weight:700;}
 [data-pg-score][data-clear]{font-size:10px;color:var(--dsw-alias-label-tertiary,#8b919a);}
-[data-pg-modal]{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;padding:22px 14px;overflow:auto;backdrop-filter:blur(3px);}
+[data-pg-modal]{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;padding:38px 14px 24px;overflow:auto;backdrop-filter:blur(3px);}
 [data-pg-settings-sheet]{overflow-anchor:none;scroll-behavior:auto;}
 [data-pg-sethead]{position:sticky;top:0;z-index:8;display:flex;align-items:center;gap:10px;padding:10px 0 10px;margin:-10px 0 2px;background:var(--dsw-alias-bg-layer-1,#171a20);border-bottom:1px solid rgba(127,127,127,.18);}
-[data-pg-setx]{flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid rgba(127,127,127,.35);background:rgba(127,127,127,.12);color:#e5e7eb;font-size:19px;line-height:1;cursor:pointer;transition:background .15s,border-color .15s,transform .12s;}
+[data-pg-setx]{flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;border:1px solid rgba(127,127,127,.35);background:rgba(127,127,127,.12);color:var(--dsw-alias-label-primary,#e5e7eb);font-size:19px;line-height:1;cursor:pointer;transition:background .15s,border-color .15s,transform .12s;}
 [data-pg-setx]:hover{background:rgba(239,68,68,.22);border-color:rgba(239,68,68,.55);color:#fff;}
 [data-pg-setx]:active{transform:scale(.94);}
-[data-pg-sheet]{width:min(1180px,100%);max-height:calc(100vh - 44px);overflow:auto;background:var(--dsw-alias-bg-layer-1,#171a20);border:1px solid var(--dsw-alias-bg-layer-3,rgba(127,127,127,.28));border-radius:16px;overflow-x:hidden;box-shadow:0 24px 80px rgba(0,0,0,.55);}
+[data-pg-sheet]{width:min(1180px,100%);max-height:calc(100vh - 96px);overflow:auto;background:var(--dsw-alias-bg-layer-1,#171a20);border:1px solid rgba(127,127,127,.30);border-radius:16px;overflow-x:hidden;box-shadow:0 24px 80px rgba(0,0,0,.55);}
 [data-pg-banner]{position:relative;height:240px;overflow:hidden;background:linear-gradient(135deg,rgba(59,130,246,.2),rgba(168,85,247,.16));}
 [data-pg-banner] img{width:100%;height:100%;object-fit:cover;display:block;opacity:.9;}
 [data-pg-banner] .shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.06),rgba(0,0,0,.72));}
@@ -2059,7 +2059,7 @@ a[data-pg-btn]{text-decoration:none;display:inline-flex;align-items:center;}
 [data-pg-keyinput]:focus{outline:none;border-color:#fde047;box-shadow:0 0 0 3px rgba(250,204,21,.22);}
 [data-pg-kbfixed]{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11.5px;color:rgba(253,230,138,.62);}
 [data-pg-kbfixed] b{font-weight:800;color:#fbbf24;background:rgba(250,204,21,.10);border:1px dashed rgba(250,204,21,.42);border-radius:7px;padding:2px 7px;}
-[data-pg-aboutline]{font-size:12.5px;font-weight:700;line-height:1.9;}[data-pg-aboutline][data-blue]{color:#60a5fa;}[data-pg-aboutline][data-blue] a{color:#93c5fd;text-decoration:none;}[data-pg-aboutline][data-blue] a:hover{text-decoration:underline;}[data-pg-aboutline][data-white]{color:#e5e7eb;font-weight:600;}[data-pg-section2][data-pink]{color:#f472b6;}[data-pg-section3][data-pink]{color:#f472b6;}[data-pg-btn][data-pink]{background:rgba(244,114,182,.16);border-color:rgba(244,114,182,.5);color:#f9a8d4;}[data-pg-btn][data-pink]:hover{background:rgba(244,114,182,.28);color:#fff;}[data-pg-section2][data-yellow]{color:#fbbf24;}[data-pg-section2][data-orange]{color:#fb923c;}[data-pg-section2][data-cyan]{color:#22d3ee;}
+[data-pg-aboutline]{font-size:12.5px;font-weight:700;line-height:1.9;}[data-pg-aboutline][data-blue]{color:#60a5fa;}[data-pg-aboutline][data-blue] a{color:#93c5fd;text-decoration:none;}[data-pg-aboutline][data-blue] a:hover{text-decoration:underline;}[data-pg-aboutline][data-white]{color:var(--dsw-alias-label-secondary,#e5e7eb);font-weight:600;}[data-pg-section2][data-pink]{color:#f472b6;}[data-pg-section3][data-pink]{color:#f472b6;}[data-pg-btn][data-pink]{background:rgba(244,114,182,.16);border-color:rgba(244,114,182,.5);color:#f9a8d4;}[data-pg-btn][data-pink]:hover{background:rgba(244,114,182,.28);color:#fff;}[data-pg-section2][data-yellow]{color:#fbbf24;}[data-pg-section2][data-orange]{color:#fb923c;}[data-pg-section2][data-cyan]{color:#22d3ee;}
 [data-pg-taste]{margin:2px 0 14px;padding:12px 14px;border:1px solid rgba(34,211,238,.22);border-radius:12px;background:rgba(8,47,73,.32);display:flex;flex-direction:column;gap:10px;}
 [data-pg-tastenums]{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12px;color:#a5b4c8;}
 [data-pg-tastenums] b{color:#e0f2fe;font-weight:800;}
@@ -2079,8 +2079,8 @@ a[data-pg-tastepill]{text-decoration:none;}
 [data-pg-tasteline]{display:flex;gap:10px;font-size:12px;line-height:1.75;color:#cbd5e1;}
 [data-pg-tasteline] span{flex:0 0 92px;color:#7dd3fc;font-weight:700;}
 [data-pg-tasteline] b{font-weight:500;color:#dbeafe;}
-[data-pg-section3]{font-size:12.5px;font-weight:700;color:#e2e8f0;margin:16px 0 4px;letter-spacing:.01em;}
-[data-pg-section2]{margin:18px 0 8px;font-size:14.5px;font-weight:800;color:#e8eef6;letter-spacing:.02em;}
+[data-pg-section3]{font-size:12.5px;font-weight:700;color:var(--dsw-alias-label-primary,#e2e8f0);margin:16px 0 4px;letter-spacing:.01em;}
+[data-pg-section2]{margin:18px 0 8px;font-size:14.5px;font-weight:800;color:var(--dsw-alias-label-primary,#e8eef6);letter-spacing:.02em;}
 [data-pg-box="group"]{border:1px solid rgba(255,255,255,.14);border-radius:16px;padding:2px 16px 14px;margin:0 0 16px;background:rgba(255,255,255,.028);}
 [data-pg-field-label]{font-size:11px;color:var(--dsw-alias-label-secondary,#aeb4bd);}
 [data-pg-note2]{font-size:10px;color:var(--dsw-alias-label-tertiary,#8b919a);line-height:1.5;}
@@ -2403,11 +2403,11 @@ a[data-pg-tastepill]{text-decoration:none;}
 [data-pg-tagrow] [data-pg-tag][data-fav="preset"]{background:#64748b !important;}
 [data-pg-tagrow] [data-pg-tagavg]{justify-self:start;min-width:78px;font-size:12.5px !important;padding:4px 10px !important;}
 [data-pg-tagrow] [data-pg-tagstat]{justify-self:start;}
-[data-pg-tagrow] [data-pg-tagstat]{font-size:12.5px;color:rgba(174,180,189,.95);white-space:nowrap;}
-[data-pg-tagrow] [data-pg-tagstat] b{color:#fff;font-weight:800;}
+[data-pg-tagrow] [data-pg-tagstat]{font-size:12.5px;color:var(--dsw-alias-label-secondary,rgba(174,180,189,.95));white-space:nowrap;}
+[data-pg-tagrow] [data-pg-tagstat] b{color:var(--dsw-alias-label-primary,#fff);font-weight:800;}
 [data-pg-tagrow] [data-pg-tagstat] em{font-style:normal;color:#fbbf24;font-weight:800;}
 [data-pg-tagrow][data-special]{background:rgba(127,127,127,.06);}
-[data-pg-tagrow][data-special] [data-pg-tag]{color:rgba(203,213,225,.88);}
+[data-pg-tagrow][data-special] [data-pg-tag]{color:var(--dsw-alias-label-secondary,rgba(203,213,225,.88));}
 [data-pg-tagcheck]{display:inline-block;width:13px;height:13px;border:0;background:none;}/* ---- 0.7.46 侧栏分组 / 标签列表标题 / man 角标与成就 ---- */
 [data-pg-sidegrp]{display:flex;flex-direction:column;gap:2px;padding:0 0 8px;}
 [data-pg-side] [data-pg-sidegrp]+[data-pg-sidegrp],[data-pg-collect-side] [data-pg-sidegrp]+[data-pg-sidegrp]{border-top:1px solid rgba(127,127,127,.14);padding-top:8px;}
@@ -2415,7 +2415,7 @@ a[data-pg-tastepill]{text-decoration:none;}
 [data-pg-sidehead] span{font-weight:600;letter-spacing:0;color:rgba(148,163,184,.65);font-size:10px;}
 [data-pg-side] [data-pg-sidetarget],[data-pg-collect-side] [data-pg-sidetarget]{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;}
 [data-pg-sideright]{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;opacity:.82;flex:0 0 auto;}
-[data-pg-taghead]{display:grid;grid-template-columns:26px minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:center;padding:11px 12px;font-size:13px;font-weight:800;letter-spacing:.03em;color:#e5e7eb;background:rgba(127,127,127,.10);border-bottom:1px solid rgba(127,127,127,.22);border-radius:10px 10px 0 0;}
+[data-pg-taghead]{display:grid;grid-template-columns:26px minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:center;padding:11px 12px;font-size:13px;font-weight:800;letter-spacing:.03em;color:var(--dsw-alias-label-primary,#e5e7eb);background:rgba(127,127,127,.10);border-bottom:1px solid rgba(127,127,127,.22);border-radius:10px 10px 0 0;}
 [data-pg-tagrow]{grid-template-columns:26px minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)!important;}
 [data-pg-tagrow] [data-pg-tagavg]{background:none!important;border:0!important;padding:0!important;color:inherit;font:inherit;text-align:left;cursor:pointer;text-decoration:underline dotted rgba(148,163,184,.55);text-underline-offset:3px;}
 [data-pg-tagrow] [data-pg-tagavg]:hover{color:#fbbf24;}
@@ -6137,7 +6137,8 @@ function TagLab({ say }) {
   const [favs, setFavs] = React.useState([])
   const [autos, setAutos] = React.useState([])
   const [manuals, setManuals] = React.useState([])
-  const reloadStats = () => api('/tag/stats').then((r) => setStats(Array.isArray(r?.items) ? r.items : [])).catch(() => {})
+  /* favOnly = 只有喜爱标签、库里还没有作品的占位行，标签墙不显示它们（保持「作品数/均分」的含义） */
+  const reloadStats = () => api('/tag/stats').then((r) => setStats((Array.isArray(r?.items) ? r.items : []).filter((it) => !it.favOnly))).catch(() => {})
   const reload = () => api('/tags/dynamic').then((r) => {
     setRecent(Array.isArray(r?.recentTags) ? r.recentTags : [])
     setTargets(Array.isArray(r?.targetTags) ? r.targetTags : [])
@@ -6651,7 +6652,12 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
   const [avgVal, setAvgVal] = React.useState('')
   const [tagMsg, setTagMsg] = React.useState('')
   const loadTagStats = React.useCallback(async () => {
-    try { const r = await api('/tag/stats'); setTagStats(r?.items || []) } catch (e) { setTagMsg(String(e?.message ?? e)) }
+    try {
+      const r = await api('/tag/stats')
+      setTagStats(r?.items || [])
+      /* 服务端顺带返回完整的喜爱标签列表：增删之后靠它同步，避免本地列表过期导致新增不显示/已删的残留 */
+      if (Array.isArray(r?.favorites)) setTagFavs(r.favorites)
+    } catch (e) { setTagMsg(String(e?.message ?? e)) }
   }, [])
 
   const addFavTag = async (name) => {
@@ -6662,7 +6668,10 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
     try {
       const r = await api('/tags/fav', { tag: t, on: true })
       setTagAdd('')
-      setTagMsg('已加入喜爱标签：「' + t + '」（现在共 ' + ((r?.favorites || []).length) + ' 条）')
+      /* 先把喜爱标签列表同步过来，列表的过滤依赖它；再拉统计，新加的标签会随统计一起回来 */
+      if (Array.isArray(r?.favorites)) setTagFavs(r.favorites)
+      else setTagFavs((cur) => (cur.some((x) => String(x).toLowerCase() === t.toLowerCase()) ? cur : [...cur, t]))
+      setTagMsg('已加入喜爱标签：「' + t + '」（现在共 ' + ((r?.favorites || []).length || (tagFavs.length + 1)) + ' 条）')
       await loadTagStats()
     } catch (e) { setTagMsg(String(e?.message ?? e)) } finally { setTagBusy(false) }
   }
@@ -7042,7 +7051,7 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
         } catch { /* 画像读取失败也允许保存纯标签预设 */ }
         const next = [...presets.filter((x) => x.name !== nm), {
           id, name: nm, favoriteTags: tagList(), runKeywords, runBlacklist,
-          scoreStops, tagStats: tagStats.map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg, weight: x.weight })),
+          scoreStops, tagStats: tagStats.filter((x) => !x.favOnly).map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg, weight: x.weight })),
           taste, tasteStyle: taste?.style || null, tasteTags: (taste?.tags || []).filter((x) => Number(x.weight) > 0.05).map((x) => x.tag).slice(0, 40),
           createdAt: Date.now(),
         }].slice(0, 50)
@@ -7065,7 +7074,7 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
           runKeywords,
           runBlacklist,
           scoreStops,
-          tagStats: tagStats.map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg })),
+          tagStats: tagStats.filter((x) => !x.favOnly).map((x) => ({ tag: x.tag, works: x.works, rated: x.rated, avg: x.avg })),
           taste,
           exportedAt: new Date().toISOString(),
         }
@@ -7773,12 +7782,24 @@ const presetBox = h('div', { 'data-pg-box': 'preset' },
               h('button', { 'data-pg-btn': '', 'data-pink': '', disabled: tagBusy, onClick: () => addFavTag(), style: { flex: '0 0 auto', width: 'auto', padding: '0 16px' } }, tagBusy ? '添加中…' : '添加到喜爱标签')),
             h('div', { 'data-pg-note': '' }, '这里只列出你真正喜爱的标签；天蓝底＝你手动加入的（亲手点或亲手打进去的），粉底＝动态规则自动加入的，灰底＝来自导入的偏好预设（三种在推荐公式里权重相同，只做显示区分）。点当前均分就能手动改（+N 是手动改过几次，只显示、不写进预设），勾选可以批量删除。想找没收藏的标签请到下面的「全部标签」墙里点。列表可上下滚动；R-18 / R-18G / AI生成 只做统计，单独放在下面「特殊标签数据统计」里。'),
             (() => {
-              if (!tagStats.length) return h('div', { 'data-pg-note': '' }, '还没有标签统计')
+              if (!tagStats.length && !(tagFavs || []).length) return h('div', { 'data-pg-note': '' }, '还没有标签统计')
               const qq = tagQ2.trim().toLowerCase()
               const match = (it) => !qq || it.tag.toLowerCase().includes(qq)
               const favSet = new Set((tagFavs || []).map((t) => String(t).toLowerCase()))
-              const rest = tagStats.filter((it) => !it.special && favSet.has(String(it.tag).toLowerCase()) && match(it))
-                .sort((a, b) => (tagSort === 'works' ? b.works - a.works : tagSort === 'rated' ? b.rated - a.rated : (b.avg ?? -1) - (a.avg ?? -1)))
+              const rows = tagStats.filter((it) => !it.special && favSet.has(String(it.tag).toLowerCase()) && match(it))
+              /* 兜底：刚手动加入、统计里还没来得及出现的标签也补进列表，保证「添加后立刻能看到」 */
+              const seen = new Set(rows.map((it) => String(it.tag).toLowerCase()))
+              for (const t of (tagFavs || [])) {
+                const name = String(t || '').trim()
+                const k = name.toLowerCase()
+                if (!name || seen.has(k) || isSpecialTagName(name) || (qq && !k.includes(qq))) continue
+                seen.add(k)
+                rows.push({ tag: name, works: 0, rated: 0, avg: null, manualN: 0, source: 'manual' })
+              }
+              /* 还没有任何作品/评分的（通常是刚加进来的标签）排最前，免得沉到滚动列表底部看不见 */
+              const fresh = (it) => (!it.works && !it.rated ? 1 : 0)
+              const rest = rows
+                .sort((a, b) => fresh(b) - fresh(a) || (tagSort === 'works' ? b.works - a.works : tagSort === 'rated' ? b.rated - a.rated : (b.avg ?? -1) - (a.avg ?? -1)))
               const mk = (it) => h('div', { 'data-pg-tagrow': '', key: it.tag },
                 h('input', {
                   type: 'checkbox', checked: pickedTags.includes(it.tag), title: '勾选后可以批量删除',
