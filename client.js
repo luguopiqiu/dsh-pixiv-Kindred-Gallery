@@ -192,6 +192,51 @@ window.__ModuleLoader__.load({
     }
 
     let baseReady = null
+    const sleepMs = (ms) => new Promise((r) => window.setTimeout(r, ms))
+
+    /* 长任务结果弹窗：账号口味报告 / 画风分析共用。
+       这两个操作都要跑 30–90 秒，以前只有一个按钮变灰，结束后也只闪一句提示，看着像没反应。 */
+    function ReportSheet({ data, onClose, say }) {
+      const [copied, setCopied] = React.useState(false)
+      if (!data) return null
+      const text = String(data.text || '')
+      const stats = Array.isArray(data.stats) ? data.stats : []
+      const copy = async () => {
+        try {
+          await navigator.clipboard.writeText(text)
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1600)
+        } catch (e) { say?.('复制失败：' + String(e?.message ?? e), 'warn') }
+      }
+      return h('div', { 'data-pg-modal': '', style: { zIndex: 420 }, onClick: onClose },
+        h('div', {
+          'data-pg-sheet': '',
+          style: { maxWidth: '700px', width: 'min(94vw, 700px)', padding: '18px 20px' },
+          onClick: (e) => e.stopPropagation(),
+        },
+        h('div', { 'data-pg-title': '' }, data.title || '结果'),
+        data.subtitle ? h('div', { 'data-pg-note2': '', style: { marginTop: '6px', lineHeight: 1.7 } }, data.subtitle) : null,
+        stats.length ? h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '10px' } },
+          ...stats.map((s, i) => h('span', {
+            key: 'st' + i,
+            style: {
+              fontSize: '12px', padding: '3px 9px', borderRadius: '999px',
+              background: 'rgba(56,189,248,.14)', border: '1px solid rgba(56,189,248,.35)', color: '#bae6fd',
+            },
+          }, s.k ? `${s.k} ` : '', h('b', { style: { fontWeight: 800 } }, String(s.v))))) : null,
+        h('div', {
+          style: {
+            marginTop: '12px', maxHeight: 'min(54vh, 500px)', overflow: 'auto', padding: '12px 14px',
+            borderRadius: '10px', background: 'rgba(148,163,184,.08)', whiteSpace: 'pre-wrap',
+            lineHeight: 1.8, fontSize: '13px', color: '#e2e8f0',
+          },
+        }, text || '（没有文本内容）'),
+        data.hint ? h('div', { 'data-pg-note2': '', style: { marginTop: '10px', lineHeight: 1.7 } }, data.hint) : null,
+        h('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px', flexWrap: 'wrap' } },
+          h('button', { 'data-pg-btn': '', type: 'button', onClick: copy }, copied ? '已复制' : '复制全文'),
+          data.href ? h('a', { 'data-pg-btn': '', href: data.href, target: '_blank', rel: 'noreferrer', style: { textDecoration: 'none' } }, '新标签打开原文') : null,
+          h('button', { 'data-pg-btn': '', 'data-primary': '', type: 'button', onClick: onClose }, '关闭'))))
+    }
     /* R-18 开跑确认弹窗每次打开软件只弹一次；之后的轮次直接放行（面板卸载重挂也不会重置） */
     let ratingGateShown = false
     let workspaceSvc = null
@@ -6213,28 +6258,71 @@ function TastePanel({ say }) {
   const [taste, setTaste] = React.useState(null)
   const [loadErr, setLoadErr] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [prog, setProg] = React.useState('')
+  const [sheet, setSheet] = React.useState(null)
   const load = () => {
     api('/taste/weights').then((r) => { setTaste(r || null); setLoadErr('') }).catch((e) => setLoadErr(String(e?.message ?? e)))
   }
   React.useEffect(() => { load() }, [])
   const refresh = async () => {
-    setBusy(true)
+    setBusy(true); setProg('已开始：正在挑评分最高的样本…')
     try {
+      const started = Date.now()
       const r = await api('/taste/style/refresh', {})
-      setTaste((x) => ({ ...(x || {}), style: r?.style || x?.style || null }))
-      say?.('画风分析已更新：已用当前评分最高的作品重新看过一遍', 'good')
-    } catch (e) { say?.(String(e?.message ?? e), 'warn') } finally { setBusy(false) }
+      if (!r.ok) throw new Error(r.error || '画风分析没开始')
+      const jobId = r.jobId
+      let snap = null
+      for (let i = 0; i < 400; i++) {
+        await sleepMs(900)
+        snap = await api('/taste/style/status?job=' + encodeURIComponent(jobId))
+        const sec = Math.max(1, Math.round((Date.now() - started) / 1000))
+        setProg(`${sec} 秒 · ${snap.step || '处理中…'}`)
+        if (snap.done) break
+      }
+      if (!snap || !snap.done) throw new Error('画风分析超时（超过 6 分钟），稍后再试')
+      if (snap.error) throw new Error(snap.error)
+      const res = snap.result || {}
+      const st = res.style || null
+      setTaste((x) => ({ ...(x || {}), style: st || x?.style || null }))
+      setProg('')
+      const lines = []
+      if (st?.summary) lines.push(st.summary)
+      if (Array.isArray(st?.keywords) && st.keywords.length) lines.push('画风关键词：' + st.keywords.join('、'))
+      if (Array.isArray(st?.avoid) && st.avoid.length) lines.push('明确避开：' + st.avoid.join('、'))
+      setSheet({
+        title: '画风与口味分析',
+        subtitle: `样本：${res.sampleText || '—'}｜看图 ${st?.sampleCount || 0} 张`,
+        text: lines.join('\n\n') || '模型这轮没有给出画风描述。',
+        stats: [
+          { k: '样本', v: st?.sampleCount || 0 },
+          { k: '参与评分', v: taste?.ratedCount || 0 },
+          { k: '喜爱的标签', v: taste?.favoriteCount || 0 },
+        ],
+        hint: `这份结论已经写进画像，下一轮跑的时候会按它加权。模型：${st?.model || '—'}。`,
+      })
+      say?.('画风分析已更新，结果在这里', 'good')
+    } catch (e) { setProg(''); say?.(String(e?.message ?? e), 'warn') } finally { setBusy(false) }
   }
   const style = taste?.style || null
   const rows = Array.isArray(taste?.tags) ? taste.tags : []
+  // 手动微调：左键 +0.05、右键 −0.05。存进 config.tagNudges，下一次重算仍然叠加。
+  const nudge = async (tag, step) => {
+    try {
+      const r = await api('/taste/nudge', { tag, step })
+      say?.(`${tag} 的推荐度微调到 ${Number(r.nudge || 0) > 0 ? '+' : ''}${Number(r.nudge || 0).toFixed(2)}`, 'good')
+      load()
+    } catch (e) { say?.(String(e?.message ?? e), 'warn') }
+  }
   const up = rows.filter((x) => Number(x.weight) > 0.02).slice(0, 8)
   const down = (Array.isArray(taste?.downTags) ? taste.downTags : rows.filter((x) => Number(x.weight) < -0.02).slice(-8).reverse()).slice(0, 8)
   const contrast = Array.isArray(taste?.contrast) ? taste.contrast : []
   const authors = Array.isArray(taste?.authors) ? taste.authors : []
   const pill = (x, tone) => h('span', {
-    key: 'tw:' + x.tag, 'data-pg-tastepill': '', 'data-tone': tone,
-    title: `推荐度 ${x.weight}｜评分均分 ${x.avg || '—'}｜有效评分 ${x.n || 0}${x.discovery ? '｜最近新发现' : ''}${x.favorite ? '｜喜爱的标签' : ''}`,
-  }, x.tag, h('b', {}, (Number(x.weight) > 0 ? '+' : '') + Number(x.weight).toFixed(2)))
+    key: 'tw:' + x.tag, 'data-pg-tastepill': '', 'data-tone': tone, style: { cursor: 'pointer' },
+    title: `推荐度 ${x.weight}｜评分均分 ${x.avg || '—'}｜有效评分 ${x.n || 0}${x.discovery ? '｜最近新发现' : ''}${x.favorite ? '｜喜爱的标签' : ''}${x.resAvg !== undefined ? `｜扣掉画师水平后的残差 ${x.resAvg}` : ''}${x.nudge ? `｜手动微调 ${x.nudge > 0 ? '+' : ''}${x.nudge}` : ''}\n左键 +0.05，右键 −0.05（手动微调单独记录，不会被下一次重算抹掉）`,
+    onClick: () => nudge(x.tag, 0.05),
+    onContextMenu: (e) => { e.preventDefault(); nudge(x.tag, -0.05) },
+  }, x.tag, h('b', {}, (Number(x.weight) > 0 ? '+' : '') + Number(x.weight).toFixed(2)), x.nudge ? h('i', { 'data-pg-nudge': '' }, x.nudge > 0 ? '↑' : '↓') : null)
   const line = (label, value) => h('div', { 'data-pg-tasteline': '' },
     h('span', {}, label), h('b', {}, value))
   return h('div', { 'data-pg-taste': '' },
@@ -6286,7 +6374,9 @@ function TastePanel({ say }) {
         : h('div', { 'data-pg-tastenote': '', style: { color: '#94a3b8' } }, '还没有口味画像。点下面的按钮，用作品库里 9/10 分的作品让多模态模型看一遍。')),
     h('div', { 'data-pg-accbtns': '' },
       h('button', { 'data-pg-btn': '', 'data-primary': '', disabled: busy, onClick: refresh }, busy ? '正在看画风…' : '重新分析画风与口味'),
-      h('span', { 'data-pg-note2': '' }, style?.updatedAt ? '上次分析：' + new Date(style.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '每 7 天读取收藏/关注后也会自动更新')),
+      busy
+        ? h('span', { 'data-pg-note2': '', style: { color: '#7dd3fc', fontWeight: 700 } }, prog || '正在准备…')
+        : h('span', { 'data-pg-note2': '' }, style?.updatedAt ? '上次分析：' + new Date(style.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '每 7 天读取收藏/关注后也会自动更新')),
     h('div', { 'data-pg-tasteblock': '' },
       h('div', { 'data-pg-tastehead': '' }, '推荐度怎么算（当前生效的公式）'),
       line('① 打分', '按偏离 7.5 分计算；高分加分，低于 6.5 分按 -1.4 × 偏差重罚：1 分 ≈ -1.0，3 分 ≈ -0.8，5 分 ≈ -0.6，7~7.5 分中性。'),
@@ -6297,6 +6387,7 @@ function TastePanel({ say }) {
       line('⑥ 作者', '作者均分 × 置信度 + 高分作者 / 画风突破加成；在平时不喜欢的对照标签上仍打高分的作者，会额外重点加权。'),
       line('⑦ 排序', '推荐度 × 90 + log10(收藏数 + 1) × 5 + 作者加权；收藏数只是小修正，不再能压过你的评分。'),
       line('⑧ 画风', '每 7 天读取收藏与关注后，会把高频标签并入画像；画风描述由多模态模型看高分作品、已关注作者和高分作者代表作生成，并单独归纳作者画风。')),
+    sheet ? h(ReportSheet, { data: sheet, onClose: () => setSheet(null), say }) : null,
   )
 }
 
@@ -6532,6 +6623,7 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
       const [runBlacklist, setRunBlacklist] = React.useState('')
       const [prefAuto, setPrefAuto] = React.useState({ enabled: true, intervalDays: 7, report: true, discussXp: false, persona: 'shy', custom: '' })
       const [prefBusy, setPrefBusy] = React.useState('')
+      const [prefReport, setPrefReport] = React.useState(null)
       const [prefMsg, setPrefMsg] = React.useState('')
       const [scoreStops, setStops] = React.useState(DEFAULT_STOPS.slice())
       const [presets, setPresets] = React.useState([])
@@ -6868,15 +6960,58 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
         } finally { setBusy('') }
       }
       const readAccountPrefs = async () => {
-        setPrefBusy('read'); setPrefMsg('')
+        setPrefBusy('read'); setPrefMsg('已开始：正在连接 pixiv…')
         try {
+          const started = Date.now()
           const r = await api('/preferences/read', {})
           if (!r.ok) throw new Error(r.error || '读取失败')
-          const n = (r.favoriteTags || []).length
-          setPrefMsg(`已读取 ${r.works || 0} 件收藏 / ${r.following || 0} 位关注，生成偏好预设（${n} 个标签）`)
-          note('账号偏好已读取，生成个人预设；可继续微调后保存', 'good')
+          const jobId = r.jobId
+          let snap = null
+          for (let i = 0; i < 400; i++) {
+            await sleepMs(900)
+            snap = await api('/preferences/read/status?job=' + encodeURIComponent(jobId))
+            const sec = Math.max(1, Math.round((Date.now() - started) / 1000))
+            setPrefMsg(`${sec} 秒 · ${snap.step || '处理中…'}`)
+            if (snap.done) break
+          }
+          if (!snap || !snap.done) throw new Error('读取超时（超过 6 分钟），稍后再试')
+          if (snap.error) throw new Error(snap.error)
+          const res = snap.result || {}
+          const n = (res.favoriteTags || []).length
+          setPrefMsg(`完成｜${res.works || 0} 件收藏 / ${res.following || 0} 位关注 · 生成偏好预设「${res.preset?.name || ''}」（${n} 个标签）`)
+          note('账号偏好已读取，口味报告已写好；弹窗里可以看全文', 'good')
+          setPrefReport({
+            title: '账号口味报告',
+            subtitle: `口吻：${res.personaName || '大肥鱼'}｜已写入工作区 preference-report.md，新建会话会按这个人设念给您听`,
+            text: res.reportText || '',
+            href: '/pixiv-gallery/api/preferences/report',
+            hint: `想看它被念出来：新建一个会话就行——工作区 AGENTS.md 里已经写好了「新会话先把这份报告念给主人听」，不用您再交代。命令：${res.preset?.name ? '已生成预设「' + res.preset.name + '」，可以到「口味预设」里直接用它跑一轮' : '偏好预设已写好'}。`,
+            stats: [
+              { k: '收藏', v: res.works || 0 },
+              { k: '关注', v: res.following || 0 },
+              { k: '标签', v: n },
+              { k: '看图', v: res.sampleCount || 0 },
+            ],
+          })
           setPrefAuto((x) => ({ ...x, lastRead: Date.now() }))
-        } catch (e) { setPrefMsg(String(e?.message ?? e)); note(String(e?.message ?? e), 'warn') } finally { setPrefBusy('') }
+          // 报告写完 → 在「知心画廊」工作区里起一个新会话，让它用人设把报告念出来
+          setPrefMsg((m) => `${m}｜正在拉起报告会话…`)
+          try {
+            const s = await api('/preferences/session', {})
+            if (s?.sessionId) {
+              note('报告会话已开好，正在切过去', 'good')
+              setPrefReport((x) => (x ? { ...x, hint: '已在「知心画廊」工作区新开一个会话，它会用人设把报告念给您听。' } : x))
+              if (workspaceSvc?.openSession) workspaceSvc.openSession(s.sessionId)
+            } else if (s?.note) {
+              setPrefReport((x) => (x ? { ...x, hint: x.hint + '\n会话没起来：' + s.note } : x))
+            }
+          } catch (e) {
+            setPrefReport((x) => (x ? { ...x, hint: x.hint + '\n会话没起来：' + String(e?.message ?? e) } : x))
+          }
+        } catch (e) {
+          setPrefMsg('失败：' + String(e?.message ?? e))
+          note(String(e?.message ?? e), 'warn')
+        } finally { setPrefBusy('') }
       }
       const tagList = () => tags.split(/[、,，;；\n]+/).map((x) => x.trim()).filter(Boolean)
       const mergeWords = (a, b) => Array.from(new Set([...(String(a || '').split(/[\s,，;；\n]+/).filter(Boolean)), ...(String(b || '').split(/[\s,，;；\n]+/).filter(Boolean))])).join('\n')
@@ -7126,7 +7261,12 @@ function Settings2({ onClose, onSaved, say, embedded = false }) {
         h('div', { 'data-pg-note2': '', style: { margin: '2px 0 8px' } }, '读取当前账号的收藏和新关注，同时把作品库 9/10 分作品、最近 3 张卡片的高分作品纳入画像；生成一份个人偏好预设和口味报告。'),
         h('div', { 'data-pg-row': '', style: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '7px 14px', marginBottom: '6px' } },
           h('button', { 'data-pg-btn': '', 'data-pink': '', style: { flex: '0 0 auto', width: 'auto', minWidth: 0 }, disabled: prefBusy === 'read', onClick: readAccountPrefs }, prefBusy === 'read' ? '读取中…' : '读取当前账号偏好'),
-          h('span', { 'data-pg-note2': '', style: { flex: '1 1 320px', minWidth: 0 } }, prefMsg || '报告写在画廊工作区的 preference-report.md，并按你选中的人设口吻念给你听。')),
+          h('span', {
+            'data-pg-note2': '',
+            style: prefBusy === 'read'
+              ? { flex: '1 1 320px', minWidth: 0, color: '#7dd3fc', fontWeight: 700 }
+              : { flex: '1 1 320px', minWidth: 0 },
+          }, prefMsg || '报告写在画廊工作区的 preference-report.md，并按你选中的人设口吻念给你听。')),
         h('label', { 'data-pg-check': '' },
           h('input', { type: 'checkbox', checked: !!prefAuto.enabled, onChange: (e) => setPrefAuto((x) => ({ ...x, enabled: e.target.checked })) }),
           '每隔一段时间，自动读取当前账号新增的收藏和新关注作者，同时关注新增的高分入库作品，纳入口味分析'),
@@ -7923,6 +8063,7 @@ const presetBox = h('div', { 'data-pg-box': 'preset' },
 
 
         upd ? h(UpdateSheet, { data: upd, onClose: () => setUpd(null), onRestart: () => { setUpd(null); doPluginReload() } }) : null,
+        prefReport ? h(ReportSheet, { data: prefReport, onClose: () => setPrefReport(null), say }) : null,
         askTags ? h('div', { 'data-pg-modal': '', onClick: () => setAskTags(false) },
           h('div', { 'data-pg-sheet': '', style: { maxWidth: '520px' }, onClick: (e) => e.stopPropagation() },
             h('div', { 'data-pg-body': '' },

@@ -184,7 +184,7 @@ const MAX_BODY = 1024 * 1024
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const WORK_CONCURRENCY = Math.max(1, Number(process.env.PIXIV_GALLERY_WORK_CONCURRENCY) || 3)
 
-const GALLERY_VERSION = '1.0.3'
+const GALLERY_VERSION = '1.1.0'
 const GALLERY_REPO = 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery'
 
 function bad(status, error, extra = {}) {
@@ -1019,12 +1019,105 @@ const probeNetwork = async () => {
   }
 
   /** 读取账号收藏 + 关注，生成一份“个人偏好预设”。只读 Pixiv。 */
+  /* 长任务：读取账号偏好 / 重新分析画风都可能跑 30–90 秒。
+     以前界面同步等一个请求，等到用户以为按钮没反应。现在后台跑 + 前端轮询步骤，
+     按钮上能看见秒数和「正在做哪一步」，完成后弹结果。 */
+  const JOBS = new Map()
+  const startJob = (kind, fn) => {
+    const running = [...JOBS.values()].find((j) => j.kind === kind && !j.done)
+    if (running) return { busy: running }
+    const id = `${kind}-${Date.now().toString(36)}`
+    const job = { id, kind, startedAt: Date.now(), step: '准备中…', steps: [], done: false, error: '', result: null }
+    JOBS.set(id, job)
+    const tick = (text) => {
+      const t = String(text || '').trim()
+      if (!t) return
+      job.step = t
+      job.steps.push({ at: Date.now(), text: t })
+      if (job.steps.length > 40) job.steps.shift()
+      try { log(`[${kind}] ${t}`) } catch { /* ignore */ }
+    }
+    Promise.resolve()
+      .then(() => fn(tick))
+      .then((r) => { job.result = r; job.done = true; job.step = '完成' })
+      .catch((e) => { job.error = String(e?.message ?? e).slice(0, 300); job.done = true; job.step = '失败' })
+    const timer = setTimeout(() => JOBS.delete(id), 10 * 60 * 1000)
+    timer.unref?.()
+    return { job }
+  }
+  const jobView = (job) => (job ? {
+    id: job.id, kind: job.kind, step: job.step, done: job.done, error: job.error,
+    elapsed: Date.now() - job.startedAt, steps: job.steps.slice(-8),
+    result: job.done && !job.error ? job.result : null,
+  } : null)
+  const jobStatus = (q) => {
+    const job = JOBS.get(String(q.get('job') || ''))
+    if (!job) return bad(404, '没有这个任务（可能已结束太久）')
+    return ok(jobView(job))
+  }
+  const unwrapJob = (r) => {
+    if (r && typeof r === 'object' && 'status' in r && 'body' in r) {
+      if (Number(r.status) >= 400) throw new Error(String(r.body?.error || '失败'))
+      return r.body
+    }
+    return r
+  }
+
+  /**
+   * 在「知心画廊」工作区里开一个新会话，让它用大肥鱼人设把 preference-report.md 念出来。
+   * 和刷Pixiv 同一条路：没有「创建会话」的接口可调，而是 spawn 一个 headless dsh（cwd=本工作区），
+   * 会话按 cwd 落盘后，再用 workspaceRegistry.attachSession 把它挂进工作区。
+   */
+  const openReportSession = async ({ since = Date.now() } = {}) => {
+    const get = (name) => { try { return ctx.get(name) } catch { return null } }
+    const reg = get('workspaceRegistry')
+    if (!reg || typeof reg.create !== 'function') return { ok: false, note: '宿主没有 workspaceRegistry 服务' }
+    let ws
+    try { ws = await reg.create(home, '知心画廊') } catch (e) { return { ok: false, note: `工作区不可用：${String(e?.message ?? e).slice(0, 120)}` } }
+    const bin = [
+      process.env.DSH_BIN,
+      process.resourcesPath ? join(process.resourcesPath, 'runtime', 'cli', 'bin', 'dsh.cmd') : '',
+      'C:\\Deepseek\\resources\\runtime\\cli\\bin\\dsh.cmd',
+    ].filter(Boolean).find((p) => { try { return existsSync(p) } catch { return false } })
+    if (!bin) return { ok: false, note: '找不到 dsh CLI（dsh.cmd），没法起会话' }
+    const prompt = '读取本工作区里的 preference-report.md（口味画像报告），用 AGENTS.md 里的大肥鱼人设，把最关键的内容念给主人听：8–12 行，结尾问一句要不要展开哪一段。不要整篇复读，不要修改任何文件。'
+    let child
+    try {
+      // 经 cmd 包一层，避免 .cmd + 中文参数的引号被拆碎
+      child = spawn('cmd.exe', ['/d', '/s', '/c', `"${bin}" --profile headless "${prompt}"`], {
+        cwd: home, shell: false, detached: true, stdio: 'ignore', windowsHide: true,
+      })
+      child.unref()
+    } catch (e) { return { ok: false, note: `起会话失败：${String(e?.message ?? e).slice(0, 140)}` } }
+    log(`已拉起报告会话：pid=${child.pid}`)
+    const persist = get('sessionPersistence')
+    if (!persist || typeof persist.list !== 'function') return { ok: true, pid: child.pid, note: '会话已起，但没有 sessionPersistence，无法自动挂进工作区' }
+    const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const target = norm(home)
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 1500))
+      let list = []
+      try { list = await persist.list() } catch { list = [] }
+      for (const snap of list) {
+        const h = snap?.header || snap
+        if (!h?.id || !h?.cwd || norm(h.cwd) !== target) continue
+        const at = Date.parse(h.createdAt || '')
+        if (Number.isFinite(at) && at < since - 60000) continue
+        try { await ws.attachSession(String(h.id)) } catch (e) { log('挂进工作区失败：' + String(e?.message ?? e).slice(0, 120)) }
+        return { ok: true, sessionId: String(h.id), pid: child.pid }
+      }
+    }
+    return { ok: true, pid: child.pid, note: '会话已起，但 30 秒内没等到它落盘（可在侧栏「未分组」里找到）' }
+  }
+
   const readPreferences = async (opts = {}) => {
+    const step = (t) => { try { opts.onStep?.(t) } catch { /* ignore */ } }
     const state = load()
     const cfg = state.config
     const cred = readJson(join(pixiv, 'credential.json'), {})
     const uid = String(cred.userId || '').trim()
     if (!uid) return bad(400, '没有找到 Pixiv 登录账号，请先在刷 Pixiv 设置里登录')
+    step('读取 Pixiv 收藏夹（第一页 100 件）')
     const bm = await fetchPixivAjax(`/ajax/user/${uid}/illusts/bookmarks?tag=&offset=0&limit=100&rest=show&lang=zh`)
     const works = Array.isArray(bm?.body?.works) ? bm.body.works : []
     const counts = new Map()
@@ -1036,11 +1129,20 @@ const probeNetwork = async () => {
     for (const w of works) {
       for (const t of Array.isArray(w?.tags) ? w.tags : []) add(t?.translated || t?.tag || t, 1)
     }
+    step(`收藏 ${works.length} 件，统计到标签 ${counts.size} 个`)
     let following = []
     try {
       const fj = readJson(join(pixiv, 'following.json'), {})
       following = Array.isArray(fj?.users) ? fj.users : []
     } catch { /* ignore */ }
+    if (!following.length) {
+      try {
+        step('本地没有关注列表缓存，直接向 pixiv 读取关注作者')
+        const fj = await fetchPixivAjax(`/ajax/user/${uid}/following?offset=0&limit=100&rest=show&lang=zh`)
+        const users = Array.isArray(fj?.body?.users) ? fj.body.users : []
+        following = users.map((u) => ({ userId: u.userId, userName: u.userName }))
+      } catch (e) { log('读取关注作者失败（不影响读取）：' + String(e?.message ?? e).slice(0, 120)) }
+    }
     for (const u of following) add(u?.userName ? `作者:${u.userName}` : '', 3)
 
     const favoriteTags = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([name, count]) => ({ name, count }))
@@ -1051,10 +1153,12 @@ const probeNetwork = async () => {
     // 实时口味权重 + 多模态画像：预设不只存标签，也存“为什么这么推”的画像
     let taste = null
     let pack = { samples: [], libraryCount: 0, roundCount: 0, libraryWorks: [] }
+    step('计算实时口味权重（评分 / 标签 / 作者）')
     try {
-      pack = pickTasteSamples(state)
+      pack = pickTasteSamples(state, { max: 18 })
       taste = buildTaste({ home, pixiv, works: pack.libraryWorks || [], log })
     } catch (e) { log('实时口味计算失败（不影响读取）：' + String(e?.message ?? e).slice(0, 120)) }
+    step(`口味权重就绪：参与评分 ${taste?.ratedCount || 0} 件；画像样本 作品库 ${pack.libraryCount} 张 + 卡片 ${pack.roundCount} 张`)
     let styleGot = { ok: false, error: '没有可用样本' }
     try {
       const styleWorks = pack.samples.length
@@ -1063,24 +1167,20 @@ const probeNetwork = async () => {
           id: w.id, title: String(w.title || ''), artist: '', tags: Array.isArray(w.tags) ? w.tags : [], score: null, source: '收藏夹',
         })).filter((w) => w.id)
       if (styleWorks.length) {
+        step(`把 ${styleWorks.length} 张本地高分图分批发给视觉模型（每批 5 张，可能要 1–3 分钟）`)
         const mergedTags = [...new Set([
           ...(Array.isArray(state.config.favoriteTags) ? state.config.favoriteTags : []),
           ...tagNames,
           ...((taste?.tagRows || []).filter((x) => Number(x.weight) > 0.05).slice(0, 20).map((x) => x.tag)),
         ])].slice(0, 80)
         styleGot = await analyzeStyleProfile(ctx, {
-          home, works: styleWorks, favoriteTags: mergedTags, source: 'account-import', log,
+          home, works: styleWorks, favoriteTags: mergedTags, source: 'account-import', maxSamples: 18, batch: 5, log,
         })
-        if (!styleGot?.ok && styleWorks.length > 6) {
-          log('账号画风分析失败，改用 6 张样本重试：' + String(styleGot?.error || '').slice(0, 120))
-          styleGot = await analyzeStyleProfile(ctx, {
-            home, works: styleWorks.slice(0, 6), favoriteTags: mergedTags, source: 'account-import', log,
-          })
-        }
       }
     } catch (e) { log('账号画风分析失败（不影响读取）：' + String(e?.message ?? e).slice(0, 120)) }
     const style = styleGot.ok ? styleGot.style : (state.config.tasteStyle || null)
     const styleError = styleGot.ok ? '' : String(styleGot?.error || '').slice(0, 200)
+    step(styleGot.ok ? '画风结论已生成' : `画风分析没跑通（${styleError || '未知原因'}），沿用上次结论`)
 
     const topWeight = (taste?.tagRows || []).slice(0, 80).map((x) => ({
       tag: x.tag, weight: x.weight, avg: x.avg, n: x.n, favorite: x.favorite, discovery: x.discovery,
@@ -1103,7 +1203,7 @@ const probeNetwork = async () => {
         recentCount: taste?.live?.recentCount || 0,
         tags: topWeight,
         style: style || null,
-        formula: '推荐度 = 0.65×历史评分（90天半衰、n/(n+3)收缩）+ 0.35×最近30件；低于6.5分按-1.4×偏差重罚；喜爱标签只给0.18基础热度；未喜爱且近3次均分≥7.5额外+0.15',
+        formula: '推荐度 = 0.65×历史（30% 绝对分 + 70% 画师基线残差，让同角色的低质图不拖累标签，90天半衰、n/(n+3)收缩）+ 0.35×最近30件；低于6.5分按-1.4×偏差重罚；喜爱标签只给0.18基础热度；未喜爱且近3次均分≥7.5额外+0.15；手动微调（±0.5）叠加在上面',
       },
       tasteStyle: style || null,
       tasteTags: (taste?.tagRows || []).filter((x) => Number(x.weight) > 0.05).slice(0, 40).map((x) => x.tag),
@@ -1131,34 +1231,71 @@ const probeNetwork = async () => {
       custom: String(cfg.prefAuto?.custom || '').slice(0, 300) + '\n\n（以下由这个人设念给主人听）',
       off: '这次的口味画像整理如下：',
     }[personaKey] || '这次的口味画像整理如下：'
+    const num = (x, d = 1) => (Number.isFinite(Number(x)) ? Number(x).toFixed(d) : '—')
+    const tagTable = (taste?.tagRows || [])
+      .filter((x) => Number(x.avg) >= 8.5 && Number(x.rawN) >= 1)
+      .sort((a, b) => Number(b.avg) - Number(a.avg) || Number(b.rawN) - Number(a.rawN))
+      .slice(0, 10)
+    const collectedBy = new Map()
+    for (const w of (pack.libraryWorks || [])) {
+      const aid = String(w.artistId || w.artist || '')
+      if (aid) collectedBy.set(aid, (collectedBy.get(aid) || 0) + 1)
+    }
+    const artistTable = (taste?.authors || []).slice()
+      .sort((a, b) => (b.tens - a.tens) || (b.avgScore - a.avgScore) || (b.rated - a.rated))
+      .slice(0, 10)
+    const starArtists = artistTable.filter((a) => Number(a.tens) >= 3).slice(0, 3)
+    const topTag = tagTable[0]
     const report = [
-      `# 用户的口味画像报告`,
+      `# 口味画像`,
       ``,
       `> ${personaLead}`,
-      `> 口吻：${personaName}；分析内容与设置页的多模态画风分析一致，只换说法。`,
       ``,
-      `## 这次看了什么`,
-      `- 时间：${new Date(now).toISOString()}`,
-      `- 收藏样本：${works.length} 件；关注作者：${following.length} 位`,
-      `- 画像样本：作品库 ${pack.libraryCount} 张（优先 9/10 分）+ 作者代表作 ${pack.authorCount || 0} 张 + 最近 3 张卡片 ${pack.roundCount} 张；本次分析看图 ${style?.sampleCount || 0} 张${styleError ? `（本次分析失败，沿用上次结论：${styleError}）` : ''}`,
-      `- 参与标签计算的评分：${taste?.ratedCount || 0} 件；生成预设：${preset.name}`,
+      style?.summary ? `**画风**：${style.summary}` : `**画风**：这次没跑通（${styleError || '样本不足'}），沿用上次结论。`,
+      style?.keywords?.length ? `**关键词**：${style.keywords.slice(0, 8).join('、')}` : '',
       ``,
-      `## 用户的口味画像（多模态分析）`,
-      style?.summary ? `${style.summary}` : `还没有可用的画风摘要（样本不足或模型失败）。先在作品库里多打 9/10 分，再点「重新分析画风」。`,
+      `## 高分标签（均分 ≥ 8.5）`,
+      `| 标签 | 均分 | 评分次数 | 推荐度 |`,
+      `| --- | --- | --- | --- |`,
+      ...(tagTable.length
+        ? tagTable.map((x) => `| ${zhTag(x.tag)} | ${num(x.avg, 2)} | ${x.rawN || 0} | ${num(x.weight, 2)} |`)
+        : ['| （还没有均分 8.5 以上的标签） | — | — | — |']),
       ``,
-      style?.keywords?.length ? `**画风关键词**：${style.keywords.join('、')}` : '',
-      style?.avoid?.length ? `**明确避开**：${style.avoid.join('、')}` : '',
+      `## 画师（评分与收藏）`,
+      `| 画师 | 评分件数 | 其中 10 分 | 均分 | 作品库收藏 |`,
+      `| --- | --- | --- | --- | --- |`,
+      ...(artistTable.length
+        ? artistTable.map((a) => `| ${a.name || a.id} | ${a.rated || 0} | ${a.tens || 0} | ${num(a.avgScore, 1)} | ${collectedBy.get(String(a.id)) || 0} |`)
+        : ['| （还没有带作者信息的评分） | — | — | — | — |']),
       ``,
-      `## 标签权重（前 20）`,
-      ...topWeight.slice(0, 20).map((x) => `- ${zhTag(x.tag)}：推荐度 ${Number(x.weight).toFixed(2)}｜均分 ${x.avg || '—'}｜有效评分 ${x.n}${x.favorite ? '｜喜爱标签' : ''}${x.discovery ? '｜新发现' : ''}`),
+      `## 值得单独说`,
+      ...(starArtists.length
+        ? starArtists.map((a) => `- **${a.name || a.id}**：${a.tens} 件满分、${a.rated} 件评分，均分 ${num(a.avgScore, 1)} —— 这种画师优先看新作，也值得顺着关注列表往下挖。`)
+        : ['- 还没有哪位画师累计到 3 件满分；再多打几轮分就能挑出「宝藏画师」。']),
+      topTag ? `- 标签 **${zhTag(topTag.tag)}** 是均分最高的一类（${num(topTag.avg, 2)} 分 / ${topTag.rawN} 件），喜欢程度稳定，不会被低质图带偏。` : '',
+      style?.avoid?.length ? `- 明确避开：${style.avoid.join('、')}。` : '',
       ``,
-      `## 高频收藏标签`,
-      ...favoriteTags.slice(0, 30).map((x) => `- ${zhTag(x.name)} ×${x.count}`),
+      `## 账号收藏（${works.length} 件）`,
+      `| 作品 | 作者 | 标签 |`,
+      `| --- | --- | --- |`,
+      ...(works.length
+        ? works.map((w) => `| ${String(w.title || '（无题）').slice(0, 40)} | ${String(w.userName || w.artist || '—').slice(0, 24)} | ${(Array.isArray(w.tags) ? w.tags : []).slice(0, 6).map((t) => t?.translated || t?.tag || t).join('、').slice(0, 60) || '—'} |`)
+        : ['| （这次没读到收藏） | — | — |']),
       ``,
-      `## 数据越多越准`,
-      `作品库里的 9/10 分作品是画像的主样本；评分数、作品数越多，画风结论越稳。最近 3 张卡片只做补充，不会盖过长期口味。`,
+      `## 收藏标签（按出现次数，前 60）`,
+      `| 标签 | 次数 |`,
+      `| --- | --- |`,
+      ...(favoriteTags.length
+        ? favoriteTags.slice(0, 60).map((x) => `| ${zhTag(x.name)} | ${x.count} |`)
+        : ['| （暂无） | — |']),
+      ``,
+      `## 关注的作者（${following.length} 位）`,
+      following.length ? following.slice(0, 200).map((u) => `- ${u.userName || u.userId}`).join('\n') : '- （这次没读到关注列表）',
+      ``,
+      `> 数据来源：作品库 ${pack.libraryCount} 张高分图 + 作者代表作 ${pack.authorCount || 0} 张 + 最近卡片 ${pack.roundCount} 张，共看 ${style?.sampleCount || 0} 张、${style?.sampleBatches || 1} 批；参与评分 ${taste?.ratedCount || 0} 件。`,
       ``,
     ].filter(Boolean).join('\n')
+    step('写入口味报告、个人预设与人设文件')
     writeText(join(home, 'preference-report.md'), report)
     writeJson(join(home, 'preferences.json'), {
       preset, favoriteTags, works: works.length, following: following.length,
@@ -1172,6 +1309,8 @@ const probeNetwork = async () => {
       sampleCount: styleGot.ok ? (styleGot.style.sampleCount || 0) : 0,
       sampleText: `作品库 ${pack.libraryCount} 张 + 作者代表作 ${pack.authorCount || 0} 张 + 最近卡片 ${pack.roundCount} 张`,
       tasteSummary: style?.summary || '',
+      reportText: report,
+      personaName,
       styleError,
     })
   }
@@ -1254,6 +1393,8 @@ const probeNetwork = async () => {
       personaOff ? '' : (personaBody[personaKey] || personaBody.shy),
       '',
       personaOff ? '' : '人设语气示例：' + (examples[personaKey] || examples.shy),
+      '',
+      personaOff ? '' : '工作区里存在 preference-report.md 时：新会话的第一段话就先用上面的人设把这份报告里最关键的几条念给主人听（8–12 行，结尾问一句要不要展开哪一段），不要整篇复读，也不要等主人先问。',
       '',
       '偏好报告里提到标签时优先用中文（如「白タイツ」写成「白丝」）；实在没有通行译名的保持原文，角色名有官方译名才用译名。',
       '',
@@ -1575,8 +1716,8 @@ const recentTagStats = (st, limit = 50) => {
     }
   }
   const fav = new Set((Array.isArray(st?.config?.favoriteTags) ? st.config.favoriteTags : []).map((x) => tagKeyOf(x)).filter(Boolean))
-  const pMinN = Math.max(2, Math.min(50, Number(st?.config?.dynamicTags?.potMinCount ?? 3)))
-  const pMinAvg = Math.max(0, Math.min(10, Number(st?.config?.dynamicTags?.potMinAvg ?? 8)))
+  const pMinN = Math.max(2, Math.min(50, Number(st?.config?.dynamicTags?.potMinCount ?? 2)))
+  const pMinAvg = Math.max(0, Math.min(10, Number(st?.config?.dynamicTags?.potMinAvg ?? 6.8)))
   return [...m.values()].map((r) => {
     const avg = r.scored ? Math.round((r.sum / r.scored) * 10) / 10 : null
     const key = tagKeyOf(r.tag) || r.tag
@@ -1595,9 +1736,9 @@ const sweepDynamicTags = (st) => {
   const prev = st.dynamicLast || { added: [], removed: [], at: 0 }
   if (cfg.on === false) return prev
   const addN = Math.max(5, Math.min(200, Number(cfg.addWindow ?? 20)))
-  const addAvg = Math.max(0, Math.min(10, Number(cfg.addMinAvg ?? 7)))
+  const addAvg = Math.max(0, Math.min(10, Number(cfg.addMinAvg ?? 6.8)))
   const dropN = Math.max(5, Math.min(200, Number(cfg.dropWindow ?? 30)))
-  const dropAvg = Math.max(0, Math.min(10, Number(cfg.dropMaxAvg ?? 4)))
+  const dropAvg = Math.max(0, Math.min(10, Number(cfg.dropMaxAvg ?? 5)))
   const rateLog = (Array.isArray(st.rateLog) ? st.rateLog : []).filter((e) => e && e.score !== null && Number.isFinite(Number(e.score)))
   const meta = (st && st.workMeta) || {}
   const tagsOf = (e) => (Array.isArray(e.tags) && e.tags.length) ? e.tags : (meta[String(e.id)]?.tags || [])
@@ -1627,7 +1768,7 @@ const sweepDynamicTags = (st) => {
   const fav = new Set((st.config.favoriteTags || []).map((x) => String(x || '').trim()).filter(Boolean))
   const favKey = new Set([...fav].map(tagKeyOf))
   const autoKey = autoFavKeySet(st)
-  const minN = Math.max(2, Math.min(50, Number(cfg.potMinCount ?? 3)))
+  const minN = Math.max(2, Math.min(50, Number(cfg.potMinCount ?? 2)))
   const added = [], removed = []
   for (const [key, v] of agg(uniqueLatest(addN))) {
     if (v.n < minN) continue
@@ -1763,7 +1904,10 @@ const markUgoira = (r) => {
       if (dlNetFail.at && Date.now() - dlNetFail.at < 10 * 60 * 1000) return 0
       const min = Number(state.config.autoDownloadMinScore ?? 9)
       const all = Array.isArray(list?.works) ? list.works : []
+      // libraryAdded 已经记着这件作品（按 id），即使目录扫描还没反映出来，也不能再下一次。
+      const addedIds = new Set(Object.values(state.libraryAdded || {}).map((v) => String(v?.id || '')).filter(Boolean))
       const todo = all.filter((w) => w && w.id && !w.downloaded && w.userScore !== null && w.userScore !== undefined && Number(w.userScore) >= min)
+        .filter((w) => !addedIds.has(String(w.id)))
         .filter((w) => {
           const j = dlJobs.get(String(w.id))
           return !j || j.state === 'fail'
@@ -1782,7 +1926,7 @@ const markUgoira = (r) => {
           const job = dlJob(w.id)
           job.state = 'run'; job.done = 0; job.total = Math.max(1, Number(w.pageCount || w.pages) || 1); job.at = Date.now()
           try {
-            const r = await downloadWork(home, { id: w.id, round: w.round || '' }, {
+            const r = await downloadWork(home, { ...w, round: w.round || '' }, {
               root, dirTemplate: dirTmpl, fileTemplate: fileTmpl, maxPages: st.config.maxPages,
               onProgress: ({ done, total }) => { job.done = done; job.total = Math.max(1, total); job.at = Date.now() },
             })
@@ -2564,11 +2708,11 @@ const routes = {
             state.config.dynamicTags = {
               on: dt.on === undefined ? (cur.on !== false) : Boolean(dt.on),
               addWindow: Math.max(5, Math.min(200, Number(dt.addWindow ?? cur.addWindow ?? 20))),
-              addMinAvg: Math.max(0, Math.min(10, Number(dt.addMinAvg ?? cur.addMinAvg ?? 7))),
+              addMinAvg: Math.max(0, Math.min(10, Number(dt.addMinAvg ?? cur.addMinAvg ?? 6.8))),
               dropWindow: Math.max(5, Math.min(200, Number(dt.dropWindow ?? cur.dropWindow ?? 30))),
-              dropMaxAvg: Math.max(0, Math.min(10, Number(dt.dropMaxAvg ?? cur.dropMaxAvg ?? 4))),
-              potMinCount: Math.max(2, Math.min(50, Number(dt.potMinCount ?? cur.potMinCount ?? 3))),
-              potMinAvg: Math.max(0, Math.min(10, Number(dt.potMinAvg ?? cur.potMinAvg ?? 8))),
+              dropMaxAvg: Math.max(0, Math.min(10, Number(dt.dropMaxAvg ?? cur.dropMaxAvg ?? 5))),
+              potMinCount: Math.max(2, Math.min(50, Number(dt.potMinCount ?? cur.potMinCount ?? 2))),
+              potMinAvg: Math.max(0, Math.min(10, Number(dt.potMinAvg ?? cur.potMinAvg ?? 6.8))),
             }
           }
           if (body.blacklistTags !== undefined) state.config.blacklistTags = String(body.blacklistTags || '').slice(0, 2000)
@@ -2787,14 +2931,24 @@ const routes = {
 
     '/preferences/read': {
       methods: ['POST'],
-      handler: async () => {
-        try {
-          return await readPreferences()
-        } catch (e) {
-          log(`读取账号偏好失败：${e?.message ?? e}`)
-          return bad(502, String(e?.message ?? e))
+      handler: async (q, body) => {
+        if (body?.sync) {
+          try {
+            return await readPreferences()
+          } catch (e) {
+            log(`读取账号偏好失败：${e?.message ?? e}`)
+            return bad(502, String(e?.message ?? e))
+          }
         }
+        const { busy, job } = startJob('pref-read', async (tick) => unwrapJob(await readPreferences({ onStep: tick })))
+        if (busy) return ok({ ok: true, jobId: busy.id, running: true, step: busy.step })
+        return ok({ ok: true, jobId: job.id, startedAt: job.startedAt })
       },
+    },
+
+    '/preferences/read/status': {
+      methods: ['GET'],
+      handler: (q) => jobStatus(q),
     },
 
     '/preferences/report': {
@@ -2802,7 +2956,34 @@ const routes = {
       handler: () => {
         const p = join(home, 'preference-report.md')
         if (!existsSync(p)) return bad(404, '还没有偏好报告')
-        return { status: 200, body: readText(p), type: 'text/markdown; charset=utf-8', cache: 'no-store' }
+        return { status: 200, body: Buffer.from(readText(p), 'utf8'), type: 'text/markdown; charset=utf-8', cache: 'no-store' }
+      },
+    },
+
+    '/preferences/session': {
+      methods: ['POST'],
+      handler: async () => {
+        const r = await openReportSession({ since: Date.now() - 5000 })
+        return r.ok ? ok(r) : bad(503, r.note || '会话没起来')
+      },
+    },
+
+    '/taste/nudge': {
+      methods: ['POST'],
+      handler: (q, body) => {
+        const tag = String(body?.tag || '').trim()
+        if (!tag) return bad(400, '缺少标签')
+        const state = load()
+        const cur = { ...(state.config.tagNudges || {}) }
+        const step = Number(body?.step ?? 0)
+        const value = Number(body?.value)
+        const next = Number.isFinite(value) ? value : (Number(cur[tag] || 0) + step)
+        const clamped = Math.round(Math.max(-0.5, Math.min(0.5, next)) * 1000) / 1000
+        if (Math.abs(clamped) < 0.001) delete cur[tag]
+        else cur[tag] = clamped
+        state.config.tagNudges = cur
+        save()
+        return ok({ tag, nudge: cur[tag] || 0, nudges: cur })
       },
     },
 
@@ -3394,7 +3575,8 @@ const routes = {
     '/taste/style/refresh': {
       methods: ['POST'],
       handler: async (q, body) => {
-        try {
+        const work = async (tick) => {
+          tick('挑选评分最高的作品作为画像样本')
           const st = load()
           const pack = pickTasteSamples(st, { max: 12 })
           let samples = pack.samples
@@ -3406,7 +3588,9 @@ const routes = {
               .slice(0, 8)
               .map((w) => ({ id: w.id, title: w.title, artist: w.artist, tags: w.tags || [], score: w.userScore, source: '作品库（兜底）' }))
           }
-          if (!samples.length) return bad(400, '作品库还没有带评分的作品。先多打几个 9/10 分再分析，数据越多越准。')
+          if (!samples.length) throw new Error('作品库还没有带评分的作品。先多打几个 9/10 分再分析，数据越多越准。')
+          tick(`样本 ${samples.length} 张（库内高分 ${pack.libraryCount} 张 + 最近卡片 ${pack.roundCount} 张）`)
+          tick('发给视觉模型看画风（可能要 30–90 秒）')
           const style = await analyzeStyleProfile(ctx, {
             home,
             works: samples,
@@ -3416,16 +3600,28 @@ const routes = {
             preferModel: String(body?.model || ''),
             log,
           })
-          if (!style.ok) return bad(500, style.error || '画风分析失败')
+          if (!style.ok) throw new Error(style.error || '画风分析失败')
           st.config.tasteStyle = style.style
           st.config.tasteStyleAt = Date.now()
           save()
-          return ok({
+          tick('画风结论已保存')
+          return {
             style: style.style,
             sampleText: `作品库 9/10 分优先 ${pack.libraryCount} 张 + 最近 3 张卡片 ${pack.roundCount} 张`,
-          })
-        } catch (e) { return bad(500, String(e?.message ?? e).slice(0, 200)) }
+          }
+        }
+        if (body?.sync) {
+          try { return ok(await work(() => {})) } catch (e) { return bad(500, String(e?.message ?? e).slice(0, 200)) }
+        }
+        const { busy, job } = startJob('taste-style', work)
+        if (busy) return ok({ ok: true, jobId: busy.id, running: true, step: busy.step })
+        return ok({ ok: true, jobId: job.id })
       },
+    },
+
+    '/taste/style/status': {
+      methods: ['GET'],
+      handler: (q) => jobStatus(q),
     },
 
     /** 跑一轮预设列表 */
@@ -3473,7 +3669,7 @@ const routes = {
       handler: (q, body) => {
         const st = load()
         if (body && body.sweep === true) { sweepDynamicTags(st); save(); feedback() }
-        return ok({ config: st.config.dynamicTags || {}, last: st.dynamicLast || null, favorites: (st.config.favoriteTags || []).filter((t) => !isSpecialTagName(t)), autoFavorites: autoFavList(st).filter((t) => !isSpecialTagName(t)), recentTags: recentTagStats(st, tagWallSize(st)), window: tagWallSize(st), targetTags: (st.config.targetTags || []).filter((t) => !isSpecialTagName(t)), manualTags: manualFavList(st), manualFavorites: manualFavList(st), potMinCount: Number(st.config.dynamicTags?.potMinCount ?? 3), potMinAvg: Number(st.config.dynamicTags?.potMinAvg ?? 8) })
+        return ok({ config: st.config.dynamicTags || {}, last: st.dynamicLast || null, favorites: (st.config.favoriteTags || []).filter((t) => !isSpecialTagName(t)), autoFavorites: autoFavList(st).filter((t) => !isSpecialTagName(t)), recentTags: recentTagStats(st, tagWallSize(st)), window: tagWallSize(st), targetTags: (st.config.targetTags || []).filter((t) => !isSpecialTagName(t)), manualTags: manualFavList(st), manualFavorites: manualFavList(st), potMinCount: Number(st.config.dynamicTags?.potMinCount ?? 2), potMinAvg: Number(st.config.dynamicTags?.potMinAvg ?? 6.8) })
       },
     },
 
@@ -5650,6 +5846,8 @@ function sendNode(res, r) {
   res.writeHead(r.status || 200, headers)
   if (r.body === undefined || r.body === null) return res.end('')
   if (Buffer.isBuffer(r.body) || r.body instanceof Uint8Array) return res.end(Buffer.from(r.body))
+  // 非 JSON 的纯文本/ markdown 直接原样写，别再套一层引号和 \n 转义
+  if (typeof r.body === 'string' && !/json/i.test(headers['content-type'])) return res.end(r.body)
   return res.end(JSON.stringify(r.body))
 }
 
@@ -5833,7 +6031,11 @@ export function apply(ctx) {
                 if (Buffer.isBuffer(r.body) || r.body instanceof Uint8Array) {
                   return new Response(Buffer.from(r.body), { status: r.status || 200, headers })
                 }
-                return jsonResponse(r.body)
+                // 纯文本 / markdown 路由（如 preference-report）原样返回，别再套 JSON 引号
+                if (typeof r.body === 'string' && !/json/i.test(String(headers['content-type'] || ''))) {
+                  return new Response(r.body, { status: r.status || 200, headers })
+                }
+                return new Response(JSON.stringify(r.body), { status: r.status || 200, headers })
               } catch (e) {
                 log(`fetch 路由 ${path} 失败：${e?.stack || e?.message || e}`)
                 return new Response(JSON.stringify({ ok: false, error: String(e?.message ?? e) }), {
