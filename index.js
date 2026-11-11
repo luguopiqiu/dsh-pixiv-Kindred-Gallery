@@ -1,4 +1,4 @@
-function normalizeTagName(raw) {
+﻿function normalizeTagName(raw) {
   const n = String(raw || '').trim()
   if (/^r-?18g$/i.test(n)) return 'R-18G'
   if (/^r-?18$/i.test(n)) return 'R-18'
@@ -18,7 +18,7 @@ function normalizeTagName(raw) {
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, statfsSync, symlinkSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path'
@@ -184,7 +184,7 @@ const MAX_BODY = 1024 * 1024
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url))
 const WORK_CONCURRENCY = Math.max(1, Number(process.env.PIXIV_GALLERY_WORK_CONCURRENCY) || 3)
 
-const GALLERY_VERSION = '1.1.0'
+const GALLERY_VERSION = '1.2.0'
 const GALLERY_REPO = 'https://github.com/splanternQAQ/dsh-pixiv-Kindred-Gallery'
 
 function bad(status, error, extra = {}) {
@@ -915,6 +915,51 @@ const probeNetwork = async () => {
     return j
   }
 
+  /** 作者主页资料：头像/签名/社交链接（24 小时内存缓存） */
+  const authorAvatarDir = () => join(home, 'author-avatars')
+  const authorProfileCache = new Map()
+  const fetchAuthorProfile = async (id) => {
+    const key = String(id)
+    const hit = authorProfileCache.get(key)
+    if (hit && Date.now() - hit.fetchedAt < 24 * 3600e3) return hit
+    const j = await fetchPixivAjax(`/ajax/user/${key}?full=1`)
+    const b = j?.body || {}
+    const social = (b.social && typeof b.social === 'object' && !Array.isArray(b.social)) ? b.social : {}
+    const links = []
+    // pixiv 主页能挂的图标都收：twitter / pixivFANBOX / pawoo / tumblr / bilibili / niconico / skeb / vase…
+    for (const [kind, v] of Object.entries(social)) {
+      if (v && typeof v === 'object' && v.url) {
+        let k = String(kind)
+        if (k === 'pixivFANBOX') k = 'fanbox'
+        links.push({ kind: k.toLowerCase(), url: String(v.url) })
+      }
+    }
+    // webpage 是自由填写的直链：按域名归类，好让前端挑对图标
+    if (b.webpage) {
+      const u = String(b.webpage)
+      let kind = 'web'
+      const low = u.toLowerCase()
+      if (low.includes('bilibili.com') || low.includes('b23.tv')) kind = 'bilibili'
+      else if (low.includes('skeb.jp')) kind = 'skeb'
+      else if (low.includes('fanbox.cc')) kind = 'fanbox'
+      else if (low.includes('twitter.com') || low.includes('x.com')) kind = 'twitter'
+      else if (low.includes('pawoo.net')) kind = 'pawoo'
+      else if (low.includes('fantia.jp') || low.includes('circle.ms')) kind = 'fantia'
+      else if (low.includes('booth.pm')) kind = 'booth'
+      links.push({ kind, url: u })
+    }
+    const prof = {
+      id: key,
+      name: String(b.name || key),
+      avatar: String(b.imageBig || b.image || ''),
+      signature: String(b.comment || '').trim(),
+      links,
+      fetchedAt: Date.now(),
+    }
+    authorProfileCache.set(key, prof)
+    return prof
+  }
+
   /**
    * 口味画像样本：优先作品库里 9/10 分的作品，其次最近 3 张卡片的高分作品。
    * 数据越多越准；作品库评分是长期口味，最近卡片只做补充。
@@ -1055,6 +1100,9 @@ const probeNetwork = async () => {
     if (!job) return bad(404, '没有这个任务（可能已结束太久）')
     return ok(jobView(job))
   }
+  /** 有没有正在跑的某类任务（跑一轮要避开「读取账号偏好」） */
+  const jobRunning = (kind) => [...JOBS.values()].some((j) => j.kind === kind && !j.done)
+  const activeJobs = () => [...JOBS.values()].filter((j) => !j.done).map((j) => ({ kind: j.kind, step: j.step, elapsed: Date.now() - j.startedAt }))
   const unwrapJob = (r) => {
     if (r && typeof r === 'object' && 'status' in r && 'body' in r) {
       if (Number(r.status) >= 400) throw new Error(String(r.body?.error || '失败'))
@@ -1074,40 +1122,101 @@ const probeNetwork = async () => {
     if (!reg || typeof reg.create !== 'function') return { ok: false, note: '宿主没有 workspaceRegistry 服务' }
     let ws
     try { ws = await reg.create(home, '知心画廊') } catch (e) { return { ok: false, note: `工作区不可用：${String(e?.message ?? e).slice(0, 120)}` } }
-    const bin = [
-      process.env.DSH_BIN,
-      process.resourcesPath ? join(process.resourcesPath, 'runtime', 'cli', 'bin', 'dsh.cmd') : '',
-      'C:\\Deepseek\\resources\\runtime\\cli\\bin\\dsh.cmd',
-    ].filter(Boolean).find((p) => { try { return existsSync(p) } catch { return false } })
-    if (!bin) return { ok: false, note: '找不到 dsh CLI（dsh.cmd），没法起会话' }
+    /* 不走 cmd.exe /c 拼引号：直接用 Electron 的 node 模式跑 CLI 的 cli.js，
+       参数按数组传，中文与引号都不会被 shell 拆碎。 */
+    const isFile = (f) => { try { return !!f && existsSync(f) } catch { return false } }
+    const cliCandidates = [
+      process.resourcesPath ? join(process.resourcesPath, 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-desktop-host', 'lib', 'cli.js') : '',
+      'C:\\Deepseek\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js',
+    ].filter(isFile)
     const prompt = '读取本工作区里的 preference-report.md（口味画像报告），用 AGENTS.md 里的大肥鱼人设，把最关键的内容念给主人听：8–12 行，结尾问一句要不要展开哪一段。不要整篇复读，不要修改任何文件。'
+    /* headless profile 默认关掉 credentials / authorization / deepseek-account，
+       不叠一层 overlay 就会直接 MISSING_CREDENTIAL 退出、会话根本不会落盘。 */
+    const overlay = join(home, 'report-session-overlay.yml')
+    try {
+      writeFileSync(overlay, [
+        '# 知心画廊：生成报告会话用的覆盖层',
+        '- id: credentials',
+        '  disabled: false',
+        '- id: authorization',
+        '  disabled: false',
+        '- id: deepseek-account',
+        '  disabled: false',
+        '',
+        '- id: tool-bash',
+        '  disabled: true',
+        '- id: tool-pwsh',
+        '  disabled: true',
+        '- id: tool-web',
+        '  disabled: true',
+        '- id: tool-fs-search',
+        '  disabled: true',
+        '',
+        '- id: tool-fs',
+        '  config:',
+        '    read: true',
+        '    readImage: false',
+        '    write: false',
+        '    edit: false',
+        '',
+      ].join('\n'), 'utf8')
+    } catch (e) { return { ok: false, note: `写覆盖层失败：${String(e?.message ?? e).slice(0, 120)}` } }
+    const outLog = join(home, 'report-session.log')
     let child
     try {
-      // 经 cmd 包一层，避免 .cmd + 中文参数的引号被拆碎
-      child = spawn('cmd.exe', ['/d', '/s', '/c', `"${bin}" --profile headless "${prompt}"`], {
-        cwd: home, shell: false, detached: true, stdio: 'ignore', windowsHide: true,
-      })
+      const fd = openSync(outLog, 'a')
+      const cliJs = cliCandidates[0]
+      if (cliJs) {
+        const exe = [process.execPath, 'C:\\Deepseek\\DeepSeek Harness.exe'].find((f) => isFile(f) && /harness/i.test(f)) || process.execPath
+        child = spawn(exe, ['--expose-internals', cliJs, '--profile', 'headless', '--patch', overlay, prompt], {
+          cwd: home, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, shell: false, detached: true,
+          stdio: ['ignore', fd, fd], windowsHide: true,
+        })
+      } else {
+        const bin = [process.env.DSH_BIN, process.resourcesPath ? join(process.resourcesPath, 'runtime', 'cli', 'bin', 'dsh.cmd') : '', 'C:\\Deepseek\\resources\\runtime\\cli\\bin\\dsh.cmd']
+          .filter(Boolean).filter(isFile)[0]
+        if (!bin) return { ok: false, note: '找不到 dsh CLI（cli.js 与 dsh.cmd 都没找到）' }
+        child = spawn(bin, ['--profile', 'headless', '--patch', overlay, prompt], {
+          cwd: home, shell: true, detached: true, stdio: ['ignore', fd, fd], windowsHide: true,
+        })
+      }
       child.unref()
     } catch (e) { return { ok: false, note: `起会话失败：${String(e?.message ?? e).slice(0, 140)}` } }
-    log(`已拉起报告会话：pid=${child.pid}`)
+    log(`已拉起报告会话：pid=${child.pid}（输出见 report-session.log）`)
+    /* 先记下启动前已有的会话 id：只认「新出现的那个」，别再把旧会话当新的返回。 */
     const persist = get('sessionPersistence')
     if (!persist || typeof persist.list !== 'function') return { ok: true, pid: child.pid, note: '会话已起，但没有 sessionPersistence，无法自动挂进工作区' }
+    const knownIds = new Set()
+    try {
+      for (const s0 of (await persist.list()) || []) {
+        const h0 = s0?.header || s0
+        if (h0?.id) knownIds.add(String(h0.id))
+      }
+    } catch { /* 老得快也无所谓 */ }
+    log('启动前已有会话 ' + knownIds.size + ' 个，只等新的那个')
     const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
     const target = norm(home)
     for (let i = 0; i < 20; i++) {
       await new Promise((r) => setTimeout(r, 1500))
       let list = []
       try { list = await persist.list() } catch { list = [] }
-      for (const snap of list) {
-        const h = snap?.header || snap
-        if (!h?.id || !h?.cwd || norm(h.cwd) !== target) continue
-        const at = Date.parse(h.createdAt || '')
-        if (Number.isFinite(at) && at < since - 60000) continue
-        try { await ws.attachSession(String(h.id)) } catch (e) { log('挂进工作区失败：' + String(e?.message ?? e).slice(0, 120)) }
-        return { ok: true, sessionId: String(h.id), pid: child.pid }
+      const fresh = list
+        .map((snap) => snap?.header || snap)
+        .filter((h) => h?.id && h?.cwd && norm(h.cwd) === target && !knownIds.has(String(h.id)))
+        .sort((a, b) => (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0))
+      if (fresh.length) {
+        const h = fresh[0]
+        let attached = false
+        for (let k = 0; k < 6; k++) {
+          try { await ws.attachSession(String(h.id)); attached = true; break } catch (e) {
+            log('挂进工作区第 ' + (k + 1) + ' 次失败：' + String(e?.message ?? e).slice(0, 120))
+            await new Promise((r) => setTimeout(r, 2000))
+          }
+        }
+        return { ok: true, sessionId: String(h.id), attached, pid: child.pid }
       }
     }
-    return { ok: true, pid: child.pid, note: '会话已起，但 30 秒内没等到它落盘（可在侧栏「未分组」里找到）' }
+    return { ok: false, pid: child.pid, note: '会话进程已起，但 30 秒内没等到它落盘；看看 report-session.log 里有没有报错' }
   }
 
   const readPreferences = async (opts = {}) => {
@@ -2135,6 +2244,51 @@ const viewingFlags = async () => {
 /* apply() 里可能想留点东西给模块层：目前没用到，留着这行注释提醒——模块层拿不到 ctx，
    要 ctx 的路由必须在 apply() 里注册（见文件末尾的自重载路由）。 */
 
+/* 把口味画像翻译成一句「锐评」式的 XP 称号：先定年龄/胸量取向，再加一个偏好前缀 */
+function buildXpTitle(taste, favoriteTags) {
+  const tags = (taste && taste.tags) || []
+  const wOf = (name) => {
+    const t = tags.find((x) => x && x.tag === name)
+    return t ? Number(t.weight) || 0 : 0
+  }
+  const sumW = (names) => names.reduce((acc, n) => acc + wOf(n), 0)
+  const contrast = {}
+  for (const c of (taste && taste.contrast) || []) if (c && c.key) contrast[c.key] = c
+  const fav = new Set((favoriteTags || []).map((x) => String(x).trim()))
+
+  const footW = sumW(['足裏', '足コキ', '足指', '素足', '裸足', '足フェチ', '臭脚'])
+  const tightW = sumW(['白タイツ', 'タイツ', 'ニーソ', '白ニーソ', 'パンスト', '白ストッキング', '白丝', '裤袜'])
+  const twinW = sumW(['ツインテール', '双马尾', 'twintails'])
+  const chinaW = sumW(['チャイナ', 'チャイナドレス', '旗袍'])
+  const swimW = sumW(['水着', 'スクール水着', '泳装'])
+  const bondW = sumW(['拘束', '縛り', '緊縛', '绑缚'])
+
+  /* 足控如果是主菜，直接给「臭脚足控」这种最锐的说法 */
+  if (footW >= 0.2 && footW > tightW) return '臭脚足控'
+  if (twinW >= 0.22) return '双马尾爱好者'
+
+  const age = contrast.age || {}
+  const bust = contrast.bust || {}
+  const pref = (c) => (c && c.preference) || 'neutral'
+  const strong = (c) => Number((c && c.strength) || 0) >= 0.2
+
+  let base = '萝莉控'
+  /* 胸量是比年龄更硬的取向，先看它；年龄只做兜底 */
+  if (pref(bust) === 'right' && strong(bust)) base = '巨乳御姐控'
+  else if (pref(bust) === 'left' && strong(bust)) base = '贫乳萝莉控'
+  else if (pref(age) === 'right' && strong(age)) base = '御姐控'
+  else if (pref(age) === 'left') base = '萝莉控'
+
+  let prefix = ''
+  if (tightW >= 0.16 || fav.has('白タイツ') || fav.has('白丝')) prefix = '白丝'
+  else if (chinaW >= 0.12 || fav.has('チャイナ')) prefix = '旗袍'
+  else if (swimW >= 0.14 || fav.has('水着')) prefix = '泳装'
+  else if (bondW >= 0.12 || fav.has('拘束')) prefix = '绑缚'
+
+  const title = (prefix + base).slice(0, 10)
+  return title || '偏好不明'
+}
+
 const routes = {
     '/follow': {
       methods: ['POST'],
@@ -2691,6 +2845,7 @@ const routes = {
         }
         if (typeof body.showInAllWorkspaces === 'boolean') state.config.showInAllWorkspaces = body.showInAllWorkspaces
         if (body.projectUrl !== undefined) state.config.projectUrl = String(body.projectUrl || '').trim().slice(0, 500)
+        if (body.uiTheme !== undefined) state.config.uiTheme = (String(body.uiTheme) === 'light' ? 'light' : 'dark')
         if (typeof body.autoAddRated === 'boolean') state.config.autoAddRated = body.autoAddRated
         if (typeof body.autoDownload === 'boolean') state.config.autoDownload = body.autoDownload
         if (body.roundScoring && typeof body.roundScoring === 'object') {
@@ -3428,9 +3583,14 @@ const routes = {
     },
 
     /** 快跑模式：不走 AI，直接按预设抓取并落盘 */
+    '/jobs/active': {
+      methods: ['GET'],
+      handler: async () => ok({ jobs: activeJobs() }),
+    },
     '/fast/run': {
       methods: ['POST'],
       handler: async (q, body) => {
+        if (jobRunning('pref-read')) return bad(409, '正在读取账号偏好（约 3 分钟），这段时间不能跑一轮；可以先给已有卡片打分，等它读完再来。')
         const st = load()
         const preset = normalizePreset(body?.preset || activePreset(st))
         // 目标标签是全局必中项，不属于预设：每轮都强制带上
@@ -3548,6 +3708,8 @@ const routes = {
           const lib = listLibraryCached(pixiv, st)
           const taste = buildTaste({ home, pixiv, works: lib?.works || [], log })
           const style = st.config.tasteStyle || null
+          /* XP 称号：从「喜欢什么样的异性类型」下手，而不是拿画风词硬拼 */
+          if (style) style.xpTitle = buildXpTitle(taste, st.config.favoriteTags || [])
           return ok({
             ratedCount: taste.ratedCount,
             favoriteCount: taste.live.favoriteCount,
@@ -3567,6 +3729,60 @@ const routes = {
               rank: '推荐度 × 90 + log10(收藏+1) × 5 + 作者加权（均分、置信度、画风突破）',
             },
           })
+        } catch (e) { return bad(500, String(e?.message ?? e).slice(0, 200)) }
+      },
+    },
+
+    /** 作者卡片：头像/签名/社交链接 + 关注状态 + 画风注记（至多 6 个） */
+    '/taste/authors': {
+      methods: ['GET'],
+      handler: async () => {
+        try {
+          const st = load()
+          const lib = listLibraryCached(pixiv, st)
+          const taste = buildTaste({ home, pixiv, works: lib?.works || [], log })
+          const style = st.config.tasteStyle || null
+          const top = (taste.authors || []).slice(0, 6)
+          const following = readJson(join(pixiv, 'following.json'), {})
+          const pubIds = new Set((following.ids || []).map(String))
+          const privIds = new Set((following.privateIds || []).map(String))
+          const noteByName = new Map()
+          for (const n of (style?.authorNotes || [])) {
+            const nm = String(n?.artist || '').trim()
+            if (nm) noteByName.set(nm, String(n?.style || ''))
+          }
+          // 每个作者挑一件作品库里评分最高的作品，用来当卡片的头图（点开进作品详情）
+          const repByArtist = new Map()
+          for (const w of (lib?.works || [])) {
+            const aid = String(w?.artistId || '')
+            const sc = Number(w?.userScore)
+            if (!aid || !Number.isFinite(sc)) continue
+            const cur = repByArtist.get(aid)
+            if (!cur || sc > Number(cur.userScore) || (sc === Number(cur.userScore) && String(w?.addedAt || '') > String(cur?.addedAt || ''))) repByArtist.set(aid, w)
+          }
+          const cards = await Promise.all(top.map(async (a) => {
+            const id = String(a.id)
+            let prof = { id, name: String(a.name || id), avatar: '', signature: '', links: [] }
+            try { prof = await fetchAuthorProfile(id) } catch { /* 取不到就用名字 */ }
+            const name = prof.name || String(a.name || id)
+            const follow = privIds.has(id) ? 'private' : (pubIds.has(id) ? 'public' : 'none')
+            const rep = repByArtist.get(id) || null
+            return {
+              id,
+              name,
+              avatar: prof.avatar || '',
+              signature: prof.signature || '',
+              links: prof.links || [],
+              follow,
+              style: noteByName.get(String(a.name || '').trim()) || noteByName.get(name.trim()) || '',
+              avgScore: Number(a.avgScore || 0),
+              n: Number(a.n || 0),
+              breakout: Number(a.breakout || 0),
+              workId: rep ? String(rep.id || '') : '',
+              work: rep || null,
+            }
+          }))
+          return ok({ cards })
         } catch (e) { return bad(500, String(e?.message ?? e).slice(0, 200)) }
       },
     },
@@ -3690,11 +3906,19 @@ const routes = {
         const has = (arr) => arr.some((x) => String(x).toLowerCase() === tag.toLowerCase())
         const put = (arr) => { if (!has(arr)) arr.push(tag) }
         const drop = (arr) => arr.filter((x) => String(x).toLowerCase() !== tag.toLowerCase())
+        const clearTag = String(body?.clearTag || '').trim().slice(0, 80)
         if (action === 'rm') put(rec.rm)
         else if (action === 'unrm') rec.rm = drop(rec.rm)
         else if (action === 'add') put(rec.add)
         else if (action === 'unadd') rec.add = drop(rec.add)
         else return bad(400, 'action 只能是 rm/unrm/add/unadd')
+        // R-18 / R-18G 互斥：给一枚打上时必须把另一枚记为移除，否则两份记录会同时成立
+        if (action === 'add' && clearTag && clearTag.toLowerCase() !== tag.toLowerCase()) {
+          const cl = rec.add.filter((x) => String(x).toLowerCase() === clearTag.toLowerCase())
+          rec.add = rec.add.filter((x) => String(x).toLowerCase() !== clearTag.toLowerCase())
+          if (!rec.rm.some((x) => String(x).toLowerCase() === clearTag.toLowerCase())) rec.rm.push(clearTag)
+          void cl
+        }
         st.tagEdits[key] = rec
         save()
         return ok({ key, rm: rec.rm, add: rec.add })
@@ -4036,6 +4260,61 @@ const routes = {
           type: 'text/plain; charset=utf-8',
           headers: { 'x-gone': '1' },
         }
+      },
+    },
+
+    /** 作者头像：先读本地缓存，没有就现取一张存盘 */
+    '/author-avatar': {
+      methods: ['GET'],
+      handler: async (q) => {
+        const id = String(q.get('id') || '').trim()
+        if (!/^\d{1,12}$/.test(id)) return bad(400, 'id 不合法')
+        const dir = authorAvatarDir()
+        const f = join(dir, `${id}.jpg`)
+        if (existsSync(f)) return sendFile(f)
+        try {
+          const prof = await fetchAuthorProfile(id)
+          if (!prof.avatar) return bad(404, '这个作者没有头像')
+          const got = await proxiedGet(prof.avatar, { headers: pixivHeaders(), timeout: 15000 })
+          if (got && got.body && got.body.length) {
+            mkdirSync(dir, { recursive: true })
+            writeFileSync(f, got.body)
+            return { status: 200, body: got.body, type: 'image/jpeg', cache: 'public, max-age=86400' }
+          }
+        } catch { /* ignore */ }
+        return bad(404, '头像这会儿没取到')
+      },
+    },
+
+    /** 按作品 id 找缩略图（画像样本用，样本没有 round） */
+    '/thumb-by-id': {
+      methods: ['GET'],
+      handler: async (q) => {
+        const id = String(q.get('id') || '').trim()
+        if (!/^\d{1,12}$/.test(id)) return bad(400, 'id 不合法')
+        try {
+          const dir = findDirById(id)
+          if (dir) {
+            const files = imageFilesOfWork(dir)
+            if (files.length) {
+              const f = join(dir, files[0])
+              if (existsSync(f)) return serveThumb(f, bodyInt(q.get('w'), 360))
+            }
+          }
+          const buf = await thumbImage(home, id)
+          if (buf && buf.length) return { status: 200, body: buf, type: 'image/jpeg', cache: 'no-cache' }
+        } catch { /* ignore */ }
+        return { status: 404, body: Buffer.alloc(0), type: 'text/plain' }
+      },
+    },
+
+    /** 交流群二维码（随插件分发的静态图，不用联网） */
+    '/qq-group-qr': {
+      methods: ['GET'],
+      handler: async () => {
+        const f = join(PLUGIN_DIR, 'assets', 'qq-group.jpg')
+        if (!existsSync(f)) return bad(404, '没有找到群二维码图片')
+        return sendFile(f)
       },
     },
 
